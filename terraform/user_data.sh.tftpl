@@ -1,0 +1,22 @@
+#!/bin/bash
+set -euxo pipefail
+
+exec > >(tee -a /var/log/aiops-bootstrap.log | logger -t aiops-bootstrap -s 2>/dev/console) 2>&1
+export DEBIAN_FRONTEND=noninteractive
+
+apt-get update
+apt-get install -y docker.io docker-compose-v2 git openssl snapd
+
+systemctl enable --now docker
+
+if ! snap list amazon-ssm-agent >/dev/null 2>&1; then
+  snap install amazon-ssm-agent --classic
+fi
+systemctl enable --now snap.amazon-ssm-agent.amazon-ssm-agent.service
+
+git clone --depth 1 --branch "${project_repo_branch}" "${project_repo_url}" /opt/aiops-agent
+umask 077
+openssl rand -hex 24 | sed 's/^/GF_SECURITY_ADMIN_PASSWORD=/' > /opt/aiops-agent/.env
+chmod 600 /opt/aiops-agent/.env
+cd /opt/aiops-agent
+docker compose up --build -d

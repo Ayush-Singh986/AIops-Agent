@@ -317,3 +317,7 @@ docker compose up -d
 ## 8. A good closing answer in an interview
 
 > “The main lesson from this project was to separate detection, causal ranking, and language-model reasoning instead of asking one model to do everything. The statistics provide measurable signals, the topology and lag analysis narrow likely causes, and the LLM adds an evidence-based explanation. I also learned that evaluation quality and operational safeguards matter as much as a plausible diagnosis. The current prototype demonstrates the workflow, while continuous ingestion, production integrations, security controls, and a larger evaluation set are the next steps.”
+
+## 9. Terraform deployment on AWS
+
+To provision a small, cost-conscious AWS host for the Docker Compose demo, follow the Terraform guide in [`terraform/README.md`](terraform/README.md). It creates a single EC2 instance with encrypted storage and Session Manager access; it does not open application, Grafana, Prometheus, Locust, or SSH ports to the internet.

@@ -31,7 +31,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin_pw123
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD:-admin_pw123}
     volumes:
       - grafana-storage:/var/lib/grafana
     depends_on:
