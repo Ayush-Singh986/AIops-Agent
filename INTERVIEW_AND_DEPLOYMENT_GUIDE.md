@@ -225,6 +225,8 @@ For remote access without opening ports publicly, create SSH tunnels from your w
 ssh -L 3000:127.0.0.1:3000 -L 9090:127.0.0.1:9090 -L 8089:127.0.0.1:8089 <USER>@<SERVER_ADDRESS>
 ```
 
+For your server, replace `<USER>@<SERVER_ADDRESS>` with `ubuntu@54.210.121.82`. Keep the `127.0.0.1` tunnel destinations unchanged: they refer to ports on the server and keep the dashboards private instead of exposing them publicly.
+
 Then open the tunneled Grafana, Prometheus, or Locust page in your local browser. Grafana is at `http://127.0.0.1:3000`; Prometheus is at `http://127.0.0.1:9090`; Locust is at `http://127.0.0.1:8089`.
 
 ### Step 6: Configure Grafana (optional)
