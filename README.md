@@ -36,6 +36,8 @@ https://github.com/user-attachments/assets/4cfea308-10b8-42ea-9e40-c5ee535436eb
 
 ## Architecture
 
+The diagram below shows the project at a glance. For the detailed code-mapped workflow, data handoffs, and runtime notes, see **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+
 ```mermaid
 flowchart TD
     A["Docker Compose\nFastAPI app + Redis + Prometheus"] --> B["Chaos Injection Harness\nredis_latency · redis_outage · app_outage\ndownstream_latency · downstream_failure\ncpu_spike · memory_leak"]
