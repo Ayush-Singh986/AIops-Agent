@@ -16,10 +16,39 @@ The system is deliberately layered so the hard quantitative work (detection and 
 
 - Evaluated end-to-end on **10 self-injected chaos incidents** across 7 fault types (Redis latency/outage, app outage, downstream latency/failure, CPU spike, memory leak) — full ground truth known at injection time.
 - The LLM layer correctly overrode a statistically-favored but wrong candidate in a recurring case (`downstream_latency_fdc80266`) by weighing correlation strength over a misleading onset signal — see the [case study](METHODOLOGY.md#case-study--correct-override-downstream_latency_fdc80266).
-- All remediation guardrails held: no unsafe action ever recommended on latency-only evidence, no restart without availability/crash evidence, every high-risk action correctly gated for human approval.
-- **One known, understood limitation**: a genuinely ambiguous incident (`cpu_spike`) with three closely-matched candidates is misdiagnosed by both layers — documented, not hidden.
+- Remediation guardrails are designed to avoid unsafe actions on latency-only evidence and require approval for high-risk actions in the interactive graph. In the evaluation harness, approval interrupts are automatically resumed and the run must remain in dry-run mode; this run did not demonstrate a human approving or executing a live repair.
+- **Known limitations in the latest run**: the genuinely ambiguous `cpu_spike` incident and a `memory_leak` incident were both misdiagnosed. These errors are shown below rather than hidden.
 
 *Sample-size caveat: 10-11 incidents means each one shifts reported accuracy by ~10 points. The comparative direction (naive → statistical → LLM-augmented) is the meaningful signal; treat the absolute percentages as indicative on this dataset, not precise real-world estimates. Full discussion in [METHODOLOGY.md](METHODOLOGY.md).*
+
+### What the latest evaluation output means
+
+The pasted run was started with `AIOPS_DRY_RUN=true python -m agent.evaluate_diagnosis`. It evaluated the labeled incidents from both the `train` and `test` folders. The unlabeled `memory_spike` file was explicitly skipped, so it is not included in the accuracy calculation.
+
+| Incident | Expected root cause | Agent diagnosis | Result |
+|---|---|---|---|
+| `cpu_spike_52dcb84f` | `process_cpu_rate` | `redis_average_latency_seconds` | Incorrect; the signals were ambiguous |
+| `downstream_failure_fd739d70` | `downstream_error_rate` | `downstream_error_rate` | Correct |
+| `downstream_latency_a00e71c7` | `downstream_average_latency_seconds` | `downstream_average_latency_seconds` | Correct |
+| `app_outage_9fc6ee70` | `app_availability` | `app_availability` | Correct |
+| `downstream_latency_f222e70b` | `downstream_average_latency_seconds` | `downstream_average_latency_seconds` | Correct |
+| `downstream_latency_fdc80266` | `downstream_average_latency_seconds` | `downstream_average_latency_seconds` | Correct override of the Phase 3 candidate |
+| `memory_leak_35c25d43` | `process_resident_memory_bytes` | `downstream_average_latency_seconds` | Incorrect |
+| `redis_latency_b50614d5` | `redis_average_latency_seconds` | `redis_average_latency_seconds` | Correct |
+| `redis_outage_5742c596` | `redis_average_latency_seconds` | `redis_average_latency_seconds` | Correct |
+| `redis_outage_8db2dfbc` | `redis_average_latency_seconds` | `redis_average_latency_seconds` | Correct |
+
+In this run, **8 of 10 diagnoses were correct (80%)**. The agent changed its Phase 3 candidate twice; one override corrected the diagnosis (`downstream_latency_fdc80266`) and one did not (`cpu_spike`). Phase 3 agreement was also 80%: agreement means the LLM kept the statistical candidate, not necessarily that the diagnosis was correct. The memory leak remained misdiagnosed even though both stages chose the same downstream-latency candidate.
+
+The average confidence was `0.572`. Treat this as the system's ranking score, **not** as a calibrated 57.2% probability. The agent asked for additional evidence in 4 of 10 cases, reached its three-iteration limit in 4 of 10, and averaged 2.00 iterations. These values can vary between runs as LLM responses and live Prometheus evidence change.
+
+**The remediation table is not evidence that this run performed a live repair.** The evaluator automatically resumes approval interruptions as `approved`; that is not a person approving an action. With dry-run enabled, the `app_outage` case's `restart_service` result was `dry_run`, and all other cases proposed `none`. No restart was carried out by this evaluation.
+
+### What the Compose checks verified
+
+The later `docker compose ps` output showed the app, Nginx proxy, Redis, Prometheus, Grafana, and Locust containers running. The scale test increased the FastAPI service from one to two Compose replicas, and both reported healthy. The rollback test switched both replicas back to the previously preserved image and again reported them healthy. These are single-host Compose checks, not AWS Auto Scaling or proof that the diagnosis evaluator triggered either operation.
+
+The pasted command `curl -fsS http://http://34.235.132.35:8000/health` has a duplicated `http://`, so it is malformed and does not validate the public endpoint. A subsequent request to `http://127.0.0.1:8000/health` on the EC2 host returned `{"status":"healthy"}`, confirming the local health route after rollback. The Terraform deployment intentionally has no public inbound rules; use SSM port forwarding rather than exposing the app, Grafana, Prometheus, Locust, or unauthenticated chaos endpoints to the internet. See the [Terraform connection instructions](terraform/README.md).
 
 ## Demo
 

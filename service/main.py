@@ -53,6 +53,15 @@ async def metrics_middleware(request: Request, call_next):
 app.include_router(router)
 app.include_router(chaos_router)
 
+@app.get("/")
+def root():
+    return {
+        "service": app.title,
+        "version": app.version,
+        "docs": "/docs",
+        "health": "/health",
+    }
+
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
