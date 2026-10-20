@@ -134,7 +134,7 @@ These steps deploy the **demo infrastructure**. They do not turn the repository 
 - Enough disk for Docker images and Prometheus/Grafana data.
 - If you plan to run the Bedrock-backed diagnosis agent: AWS credentials supplied securely, Bedrock model access in the configured AWS region, and permission to invoke the selected model.
 
-Do not expose the demo ports directly to the public internet. The Compose file publishes the app, Prometheus, Grafana, and Locust ports on all host interfaces. The chaos endpoints have no authentication, and Grafana currently has a default password in Compose.
+Do not expose the demo ports directly to the public internet. The Compose file publishes the app, Prometheus, Grafana, and Locust ports on all host interfaces. The chaos endpoints have no authentication, and Grafana requires a password supplied through a protected, untracked `.env` file.
 
 ### Step 1: Install Docker, Compose, Git, and Python
 
@@ -175,7 +175,15 @@ If the project is already on the server, use `cd` to enter that project director
 
 ### Step 3: Secure the demo before starting it
 
-1. Edit `docker-compose.yml` and replace `GF_SECURITY_ADMIN_PASSWORD=admin_pw123` with a unique password. For a real deployment, load secrets from a protected environment file or secret manager rather than committing them to Git.
+1. Create a unique Grafana password in a root-only `.env` file. Docker Compose reads this file automatically from the project directory; the file is ignored by Git:
+
+   ```bash
+   umask 077
+   python3 -c 'import secrets; print("GF_SECURITY_ADMIN_PASSWORD=" + secrets.token_urlsafe(32))' > .env
+   chmod 600 .env
+   ```
+
+   Do not put the password in `docker-compose.yml`, commit `.env`, or share it in logs. Compose will refuse to start Grafana if the required variable is missing or empty.
 2. Restrict inbound firewall access. For a private demo, allow SSH and use SSH tunnels to access the web interfaces instead of opening their ports publicly. For example:
 
    ```bash

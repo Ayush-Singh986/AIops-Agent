@@ -72,7 +72,7 @@ Run that command in a terminal, then visit `http://127.0.0.1:3000`. Terraform ge
 sudo sed -n 's/^GF_SECURITY_ADMIN_PASSWORD=//p' /opt/aiops-agent/.env
 ```
 
-Keep the password private. For local, non-Terraform Compose runs, the existing demo default remains `admin` / `admin_pw123`; set `GF_SECURITY_ADMIN_PASSWORD` in a local `.env` file to override it. For Prometheus and Locust, create separate SSM port-forwarding sessions for remote ports `9090` and `8089`, respectively. The app can be forwarded on `8000`. Keep chaos endpoints restricted to your own local tunnel; they intentionally disrupt the demo and have no authentication.
+Keep the password private. For local Compose runs, create a protected root `.env` file before starting the stack; Compose reads it automatically, and refuses to start Grafana if the password is absent. For Prometheus and Locust, create separate SSM port-forwarding sessions for remote ports `9090` and `8089`, respectively. The app can be forwarded on `8000`. Keep chaos endpoints restricted to your own local tunnel; they intentionally disrupt the demo and have no authentication.
 
 The AWS identity on your workstation needs permissions to start, resume, and terminate Systems Manager sessions to this instance. Follow your organization's least-privilege policy.
 
