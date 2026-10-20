@@ -62,6 +62,12 @@ Keep dry-run enabled: the evaluator automatically resumes approval interrupts an
 
 The screenshots below document the manual deployment, scale-out, and rollback checks on the EC2 Compose host. After rollback, the app, Nginx proxy, Redis, Prometheus, Grafana, and Locust containers were running. The scale test increased the FastAPI service from two to three Compose replicas, and all three reported healthy. The rollback test switched all three replicas back to the previously preserved image and again reported them healthy. These are single-host Compose checks, not AWS Auto Scaling or proof that the diagnosis evaluator triggered either operation. Docker's `0.0.0.0` port bindings in `docker compose ps` describe host-level bindings only; the Terraform security group still has no inbound rules, so access should use SSM port forwarding.
 
+#### Starting the Docker Compose stack
+
+![EC2 terminal showing Docker Compose starting the project services](docs/ec2-compose-startup.png)
+
+`docker compose up -d` creates the project network and starts Redis, the FastAPI app, Nginx proxy, Prometheus, Grafana, and Locust. The output shows the app reaching **healthy**; the proxy was still in its health-check **starting** phase when `docker ps` was captured, so this screenshot documents startup in progress rather than every service already being healthy. Docker lists host port bindings for the web and monitoring interfaces, but AWS access remains controlled separately by the security group. The Terraform deployment keeps inbound access closed; use the documented SSM port-forwarding commands.
+
 #### Deploying the updated app image
 
 ![EC2 terminal showing git pull, deployment build, and two healthy FastAPI replicas](docs/ec2-deploy-compose.png)
