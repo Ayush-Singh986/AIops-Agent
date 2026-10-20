@@ -545,6 +545,40 @@ There are 10 cases total. The diagonal adds up to 8, so accuracy is 8 ÷ 10 = **
 
 The evaluator does not let the LLM examine every raw time series and independently discover an answer. The statistical detector first finds unusual metrics; the topology/correlation logic ranks possible causes; then the LangGraph agent gathers context and asks Bedrock to choose or challenge a candidate. Finally, the system selects an action or does nothing. This structure makes the reasoning measurable, but the screenshots also show its limits: the answer can still be wrong, and 10 test cases are not enough to prove production reliability.
 
+#### Latest pasted evaluation output
+
+This run scored 10 labeled incidents. `memory_spike_84277f58.parquet` was skipped because it has no ground-truth label, so it is not included in the accuracy calculation.
+
+```text
+Ground Truth Accuracy:       80.00% (8 of 10)
+Agreement with Phase 3:      80.00% (8 of 10)
+Average Confidence:           0.572
+Average Iterations:           2.30
+Evidence escalation:          6 of 10 incidents
+Maximum iteration cases:      6 of 10 incidents
+LLM Overrides:                2
+Correct Overrides:            1
+```
+
+The detailed diagnoses in the pasted output are:
+
+| Incident | Expected root cause | Phase 3 candidate | Final LLM diagnosis | Result |
+|---|---|---|---|---|
+| `cpu_spike_52dcb84f` | `process_cpu_rate` | `downstream_average_latency_seconds` | `redis_average_latency_seconds` | Incorrect |
+| `downstream_failure_fd739d70` | `downstream_error_rate` | `downstream_error_rate` | `downstream_error_rate` | Correct |
+| `downstream_latency_a00e71c7` | `downstream_average_latency_seconds` | `downstream_average_latency_seconds` | `downstream_average_latency_seconds` | Correct |
+| `app_outage_9fc6ee70` | `app_availability` | `app_availability` | `app_availability` | Correct |
+| `downstream_latency_f222e70b` | `downstream_average_latency_seconds` | `downstream_average_latency_seconds` | `downstream_average_latency_seconds` | Correct |
+| `downstream_latency_fdc80266` | `downstream_average_latency_seconds` | `process_resident_memory_bytes` | `downstream_average_latency_seconds` | Correct; LLM override |
+| `memory_leak_35c25d43` | `process_resident_memory_bytes` | `downstream_average_latency_seconds` | `downstream_average_latency_seconds` | Incorrect |
+| `redis_latency_b50614d5` | `redis_average_latency_seconds` | `redis_average_latency_seconds` | `redis_average_latency_seconds` | Correct |
+| `redis_outage_5742c596` | `redis_average_latency_seconds` | `redis_average_latency_seconds` | `redis_average_latency_seconds` | Correct |
+| `redis_outage_8db2dfbc` | `redis_average_latency_seconds` | `redis_average_latency_seconds` | `redis_average_latency_seconds` | Correct |
+
+The two errors are the CPU-spike case, which the LLM labels as Redis latency, and the memory-leak case, which it labels as downstream latency. The LLM changed the Phase 3 answer twice and corrected one of those overrides (`downstream_latency_fdc80266`). A confidence of `0.572` is the system's score, not a calibrated 57.2% probability that its diagnoses are correct.
+
+The remediation review shows that only the app-outage case selected `restart_service`, and that action was executed. The other nine cases selected `none`; their blank/`NaN` remediation status means no remediation command ran. The `memory_spike` case was not scored because it has no expected label. This is a small, synthetic evaluation set, so the 80% result is useful for understanding this run but is not a production-accuracy guarantee.
+
 #### Important: the evaluator actually restarted the app
 
 The screenshot is from an earlier run in which `agent.evaluate_diagnosis.py` auto-approved the graph interrupt and the app-outage case executed `docker compose restart aiops-app` (shown by `[+] Restarting 1/1`). The current code defaults to dry-run via `AIOPS_DRY_RUN=true`, but the evaluator still auto-approves interrupts. Keep the default for evaluation; do not run the evaluator with `AIOPS_DRY_RUN=false`.
