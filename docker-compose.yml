@@ -1,0 +1,54 @@
+services:
+  redis:
+    image: redis:7-alpine
+
+  aiops-app:
+    build:
+      context: ./service
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - LOG_FILE=/app/logs/app.jsonl
+    depends_on:
+      - redis
+    volumes:
+      - ./logs:/app/logs
+      
+  prometheus:
+    image: prom/prometheus:latest
+    user: "root"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - aiops-app
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin_pw123
+    volumes:
+      - grafana-storage:/var/lib/grafana
+    depends_on:
+      - prometheus
+    
+  locust:
+    image: locustio/locust:latest
+    ports:
+      - "8089:8089"
+    command: >
+      -f /mnt/chaos/locustfile.py --host http://aiops-app:8000
+    volumes:
+      - ./chaos:/mnt/chaos
+    depends_on:
+      - aiops-app
+
+volumes:
+  # persist storage on disk
+  grafana-storage:
+  prometheus-data:

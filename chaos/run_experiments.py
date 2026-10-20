@@ -1,0 +1,90 @@
+import argparse
+import time
+from chaos.scripts.app_outage_experiment import run_outage_experiment
+from chaos.scripts.cpu_spike import run_cpu_spike_experiment
+from chaos.scripts.memory_leak_experiment import run_memory_leak_experiment
+from chaos.scripts.downstream_latency_experiment import run_downstream_latency_experiment
+from chaos.scripts.redis_latency_experiment import run_latency_experiment
+from chaos.scripts.redis_outage_experiment import run_redis_outage_experiment
+from chaos.scripts.downstream_failure_experiment import run_downstream_failure_experiment
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="AIOps Chaos Experiment Runner")
+    parser.add_argument(
+        "--fault",
+        type=str,
+        required=True,
+        choices=["redis_latency", "app_outage", "redis_outage", 
+                 "downstream_latency", "downstream_failure", 
+                 "cpu_spike", "memory_leak"
+                ],
+        help="The type of fault to inject into the system"
+    )
+    parser.add_argument(
+        "--target",
+        type=str,
+        default="aiops-app",
+        help="Target container/service (default: aiops-app)"
+    )
+    parser.add_argument(
+        "--baseline-seconds", 
+        type=int, 
+        default=30, 
+        help="Normal runtime duration before injection (default: 30)"
+    )
+    parser.add_argument(
+        "--duration-seconds", 
+        type=int, 
+        default=60, 
+        help="Active duration of the injected fault"
+    )
+    parser.add_argument(
+        "--delay-ms", 
+        type=int, 
+        default=500, 
+        help="Millisecond delay (only used for redis_latency)"
+    )
+    parser.add_argument(
+        "--failure-rate",
+        type=float,
+        default=1.0,
+        help="Rate of downstream errors (from 0.0 to 1.0)"
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="CPU worker threads to spawn"
+    )
+    parser.add_argument(
+        "--megabytes",
+        type=int,
+        default=50,
+        help="Size of memory leak allocation in MB"
+    )
+    
+    args = parser.parse_args()
+    
+    print(f"Starting Chaos Experiment Runner")
+    print(f"=========================================")
+    print(f"Phase 1: Baseline Period ({args.baseline_seconds} seconds)")
+    print(f"   Waiting for system to gather normal metric traffic...")
+    time.sleep(args.baseline_seconds)
+    
+    if args.fault == "redis_latency":
+        run_latency_experiment(args.duration_seconds, args.delay_ms)
+    elif args.fault == "app_outage":
+        run_outage_experiment(args.duration_seconds, args.target)
+    elif args.fault == "redis_outage":
+        run_redis_outage_experiment(args.duration_seconds)
+    elif args.fault == "downstream_latency":
+        run_downstream_latency_experiment(args.duration_seconds, args.delay_ms)
+    elif args.fault == "downstream_failure":
+        run_downstream_failure_experiment(args.duration_seconds, args.failure_rate)
+    elif args.fault == "cpu_spike":
+        run_cpu_spike_experiment(args.duration_seconds, args.workers)
+    elif args.fault == "memory_leak":
+        run_memory_leak_experiment(args.duration_seconds, args.megabytes)
+        
+    print(f"=========================================")
