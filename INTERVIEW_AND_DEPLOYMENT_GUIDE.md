@@ -133,7 +133,7 @@ Terraform is an **alternative way to create a new AWS server**, not a step to ru
 | Your situation | What to do |
 |---|---|
 | You already created an EC2/Ubuntu server and are following manual Steps 1–7 below | Continue on that server. You do not need Terraform for this deployment. |
-| You want Terraform to create and configure a new AWS server | Start with [Section 9: Terraform deployment](#9-provision-the-aws-demo-infrastructure-with-terraform) **before** manual Step 1. Terraform installs Docker, clones the project, creates the Grafana `.env`, and starts Compose for you. Then use Section 9's Systems Manager and dashboard-access steps. |
+| You want Terraform to create and configure a new AWS server | Use the [Terraform alternative](#9-alternative-deployment-provision-a-new-aws-server-with-terraform) **instead of** manual Steps 1–4. Terraform installs Docker, clones the project, creates the Grafana `.env`, and starts Compose for you. Then use its Systems Manager and dashboard-access steps. |
 | You already completed manual Steps 1–7 and now want to use Terraform | Do not apply Terraform to the existing server: this configuration creates a **separate EC2 instance**, which may incur additional charges. Use Terraform only if you intentionally want a second/new server or plan to migrate and later remove the manually provisioned one. |
 
 In short, the Terraform route is **Terraform apply → automatic server setup → Systems Manager access → verify/use the running stack → Terraform destroy when finished**. It replaces the manual server creation/setup steps; it is not required to run the application you have already deployed.
@@ -264,6 +264,16 @@ python3 -m chaos.run_experiments --fault redis_latency
 
 The default experiment waits 30 seconds for a baseline, then injects the fault for 60 seconds. Other supported `--fault` values are `redis_outage`, `app_outage`, `downstream_latency`, `downstream_failure`, `cpu_spike`, and `memory_leak`. These experiments disrupt or stress the demo, so do not run them against a production service.
 
+### After Step 7: what should I do next?
+
+Choose the path that matches your goal:
+
+- **Keep using the server you already deployed manually:** the main deployment is running. If you want to run the diagnosis agent, continue to **Step 8 (optional)** below. If you only want the service, monitoring, and chaos demo, skip Step 8 and leave the stack running. When you are finished, use **Step 9** to stop the containers.
+- **Run diagnosis evaluation on the existing server:** continue to Step 8. The agent runs separately from Docker Compose and requires Python dependencies, Prometheus, and AWS Bedrock access. Do not run the evaluator with real remediation enabled; follow the safety warning in Step 8.
+- **Have Terraform create infrastructure:** do **not** run Terraform as the next step on the server you just configured. Terraform is a separate deployment path that creates another EC2 instance. Start at [Section 9: Terraform alternative](#9-alternative-deployment-provision-a-new-aws-server-with-terraform) from your workstation only if you intentionally want that new server. Once it is running, use that section's access and verification steps.
+
+**Quick flow:** manual deployment is **Steps 1–7 → optionally Step 8 → Step 9 when finished**. Terraform is **a separate alternative**, not Step 8 or Step 9 of the manual setup.
+
 ### Step 8: Prepare the separate Python diagnosis environment (optional)
 
 The Compose stack does not include the LangGraph diagnosis agent. To run its Python entry points on this server, create a virtual environment and install the detector requirements plus the agent dependencies:
@@ -339,13 +349,13 @@ docker compose up -d
 
 > “The main lesson from this project was to separate detection, causal ranking, and language-model reasoning instead of asking one model to do everything. The statistics provide measurable signals, the topology and lag analysis narrow likely causes, and the LLM adds an evidence-based explanation. I also learned that evaluation quality and operational safeguards matter as much as a plausible diagnosis. The current prototype demonstrates the workflow, while continuous ingestion, production integrations, security controls, and a larger evaluation set are the next steps.”
 
-## 9. Provision the AWS demo infrastructure with Terraform
+## 9. Alternative deployment: provision a new AWS server with Terraform
 
 Terraform provisions a cost-conscious demo host in **US East (N. Virginia), `us-east-1`**, by default. It creates a single EC2 instance for the Docker Compose stack, encrypted storage, and AWS Systems Manager access. The instance security group has no inbound rules: do not expect to connect directly to its public IP or open SSH, Grafana, Prometheus, or Locust to the internet.
 
 This is demo infrastructure, not a highly available or production-hardened deployment. AWS charges apply while resources are running; check current regional pricing before applying.
 
-**Where this fits:** choose this path before the manual Steps 1–4 in Section 6 if you want Terraform to create a new host. Terraform performs those installation and Compose startup tasks automatically. If you already completed Section 6 on an existing host, do not apply this configuration unless you intentionally want an additional EC2 instance.
+**Where this fits:** this is a separate alternative to manual Steps 1–4 in Section 6, not a step after manual Step 7. Terraform creates a new host and performs installation and Compose startup automatically. If you already completed Section 6 on an existing host, do not apply this configuration unless you intentionally want an additional EC2 instance.
 
 ### Prerequisites
 
