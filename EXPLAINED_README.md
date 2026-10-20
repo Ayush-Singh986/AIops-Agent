@@ -473,6 +473,25 @@ The project compares:
 
 The documentation states that the combined pipeline improves accuracy over the naive and statistical-only approaches, which is the core claim of the project.
 
+### Understanding the latest `agent.evaluate_diagnosis` output
+
+The pasted run shows the complete evaluator finishing all 10 labeled incidents. Here is what its output means:
+
+- **`Root cause candidate: ... prior=... corr=... onset=... conf=...`** is Phase 3's statistical ranking. `prior` measures whether the dependency map says the candidate can explain other anomalous metrics; `corr` measures lagged correlation; `onset` rewards earlier detected deviation. The combined score is `0.5 * prior + 0.35 * corr + 0.15 * onset`. The highest confidence is Phase 3's leading hypothesis, not a guaranteed answer.
+- **`nova_pro latency: ...`** means the Bedrock request completed and reports its duration. In this pasted run, the earlier `NoCredentialsError` is no longer occurring. If that error returns, the EC2 instance still needs an attached IAM role with `bedrock:InvokeModel` permission for the configured model. Adding code to GitHub alone does not attach AWS permissions to an existing instance.
+- **`Escalation decision: True`** means the agent asked its graph to gather related metric evidence and try diagnosis again. `False` means it will not escalate that attempt. The graph limits diagnosis iterations.
+- **`Expected`** is the labeled ground-truth metric for the injected fault. **`Phase3`** is the statistical top candidate. **`LLM`** is the agent's final diagnosis after considering evidence. An LLM answer can differ from both the expected label and Phase 3.
+- **`Ground Truth Accuracy: 80.00%`** means 8 of the 10 labeled cases in this run matched the expected root cause. It is a small sample: each incident changes the score by 10 percentage points. It is not a promise of 80% accuracy in production.
+- **`LLM Overrides: 2` / `Correct Overrides: 1`** means the agent changed the Phase 3 answer twice; only one change corrected the ground-truth diagnosis. In this run, CPU spike was diagnosed as Redis latency, and the memory leak was diagnosed as downstream latency. The downstream-latency case where Phase 3 favored memory was corrected by the LLM; the CPU-spike ambiguity remains unresolved.
+- **`Evidence escalation: 6/10`** means six of the ten incidents asked the graph to collect additional evidence at least once.
+- In the remediation table, **`action: none`** means no repair was selected for that case, so the blank/`NaN` remediation status means no command was executed. The app-outage case selected `restart_service` and reports `executed`.
+
+#### Important: the evaluator actually restarted the app
+
+This run is not a harmless diagnosis-only report. `agent/evaluate_diagnosis.py` invokes the graph with `auto_approve=True`, and `DRY_RUN` is currently `False` in `agent/remediation.py`. The output confirms that the app-outage case executed `docker compose restart aiops-app` (shown by `[+] Restarting 1/1`). Run this evaluator only against an isolated demo environment. Before any run where remediation must not execute, set `DRY_RUN = True` in `agent/remediation.py`; do not rely on the approval interrupt to protect this evaluator, because it auto-approves it.
+
+The earlier `NoCredentialsError` was an AWS configuration issue, not an anomaly-detector failure. The current run's successful `nova_pro latency` lines show Bedrock was reachable and authenticated for this run; they do not prove that credentials are configured safely or that future runs will use the same AWS role. For the Terraform-created instance, the Bedrock permission is defined in `terraform/bedrock-policy.json`. An existing manually created EC2 instance needs an appropriate IAM role attached separately.
+
 ---
 
 ## 13) Important design limitations
