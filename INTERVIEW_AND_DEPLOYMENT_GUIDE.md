@@ -175,15 +175,13 @@ If the project is already on the server, use `cd` to enter that project director
 
 ### Step 3: Secure the demo before starting it
 
-1. Create a unique Grafana password in a root-only `.env` file. Docker Compose reads this file automatically from the project directory; the file is ignored by Git:
+1. Generate a unique Grafana password in a protected `.env` file. From the project directory, run:
 
    ```bash
-   umask 077
-   python3 -c 'import secrets; print("GF_SECURITY_ADMIN_PASSWORD=" + secrets.token_urlsafe(32))' > .env
-   chmod 600 .env
+   bash scripts/setup-env.sh
    ```
 
-   Do not put the password in `docker-compose.yml`, commit `.env`, or share it in logs. Compose will refuse to start Grafana if the required variable is missing or empty.
+   The script creates the file if missing, preserves an existing password, and sets file permissions to `600`. Docker Compose reads `.env` automatically from the project directory, and the file is ignored by Git. Do not put the password in `docker-compose.yml`, commit `.env`, or share it in logs. Compose will refuse to start Grafana if the required variable is missing or empty.
 2. Restrict inbound firewall access. For a private demo, allow SSH and use SSH tunnels to access the web interfaces instead of opening their ports publicly. For example:
 
    ```bash

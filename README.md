@@ -84,15 +84,13 @@ Python, FastAPI, Redis, Prometheus, Docker Compose, LangGraph, Amazon Bedrock (N
 
 ## Running It
 
-Grafana requires `GF_SECURITY_ADMIN_PASSWORD` in a local `.env` file in the project root. Compose loads this file automatically; the password is required and there is no default. On Linux/macOS, create a protected file with:
+Grafana requires `GF_SECURITY_ADMIN_PASSWORD` in a local `.env` file in the project root. Compose loads this file automatically; the password is required and there is no default. Generate a unique password and protect the file with:
 
 ```bash
-umask 077
-python3 -c 'import secrets; print("GF_SECURITY_ADMIN_PASSWORD=" + secrets.token_urlsafe(32))' > .env
-chmod 600 .env
+bash scripts/setup-env.sh
 ```
 
-Keep `.env` private and do not commit it.
+This command creates `.env` if it is missing, or adds the password if the file exists without one. If a password is already configured, it preserves it. Keep `.env` private; it is ignored by Git.
 
 ```bash
 docker compose up --build -d
