@@ -321,3 +321,7 @@ docker compose up -d
 ## 9. Terraform deployment on AWS
 
 To provision a small, cost-conscious AWS host for the Docker Compose demo, follow the Terraform guide in [`terraform/README.md`](terraform/README.md). It creates a single EC2 instance with encrypted storage and Session Manager access; it does not open application, Grafana, Prometheus, Locust, or SSH ports to the internet.
+
+## 10. Future roadmap
+
+The planned next steps and their priorities are described in [`ROADMAP.md`](ROADMAP.md). They focus first on safety, reproducible evaluation, and diagnosis reliability before expanding integrations or production deployment.

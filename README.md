@@ -65,6 +65,8 @@ For a plain-English interview walkthrough, project Q&A, and step-by-step Ubuntu 
 
 For a cost-conscious AWS deployment using Terraform and a single EC2 instance, see **[terraform/README.md](terraform/README.md)**.
 
+See **[ROADMAP.md](ROADMAP.md)** for the proposed next steps and longer-term direction.
+
 ## Components
 
 - **Chaos harness** (`chaos/`) — Docker-based fault injectors for 7 fault types, each logging ground-truth timing and parameters to `chaos/incidents.log`.
