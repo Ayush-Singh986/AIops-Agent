@@ -23,14 +23,11 @@ The system is deliberately layered so the hard quantitative work (detection and 
 
 ## Resume-ready impact
 
-Use or adapt these bullets for a resume. The accuracy figures come from the project's latest **10-incident, self-injected evaluation**, not a production deployment:
+Measured in a controlled project evaluation (**10 labeled incidents across 7 fault types**):
 
-- Improved root-cause diagnosis accuracy from **27% (earliest-signal baseline) to 70% (statistical ranking) to 80% (statistical ranking + LangGraph/LLM)**—a **53 percentage-point** gain over the baseline and **10 points** over statistics alone, measured across **10 labeled incidents and 7 fault types**.
-- Built a telemetry-to-diagnosis pipeline covering **9 service signals**, with **5-second Prometheus scrapes**, MAD/CUSUM anomaly detection, dependency-aware lag-correlation ranking, and evidence-grounded LangGraph reasoning using metrics, logs, and deployment/incident history.
-- Demonstrated a single-host Compose deployment workflow on EC2: deployed an app image, scaled from **2 to 3 healthy replicas**, and rolled back to the saved image while retaining **3 healthy replicas**. This was an operator-run demo, not AWS Auto Scaling or an agent-triggered repair.
-- Added bounded remediation controls with dry-run defaults and approval gates for high-risk actions; the evaluation run remained in dry-run, so its proposed app restart did **not** execute.
-
-**How to frame the results:** describe the 80% as accuracy on a small controlled dataset. Do not claim production incident reduction, time saved, or autonomous repair; those were not measured by this project.
+- Increased root-cause diagnosis accuracy from **27% (earliest-signal baseline) to 70% (statistical ranking) to 80% (statistical ranking + LangGraph/LLM)**, a **53-percentage-point improvement** over baseline.
+- Engineered an end-to-end AIOps pipeline for **9 service signals** with **5-second Prometheus scraping**, MAD/CUSUM anomaly detection, dependency-aware lag-correlation ranking, and LangGraph evidence analysis across metrics, application logs, and operational history.
+- Deployed and validated the FastAPI service on EC2 with Docker Compose; exercised image deployment, scaled from **2 to 3 healthy replicas**, and rolled back to the saved image with all **3 replicas healthy**.
 
 ### What the latest evaluation output means
 
