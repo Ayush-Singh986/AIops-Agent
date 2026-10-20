@@ -6,6 +6,7 @@ from detector.rootcause.analysis import DEPENDENCY_PRIOR
 
 DEPLOY_FILE = Path("logs/deploys.jsonl")
 INCIDENT_LOG = Path("chaos/incidents.log")
+_JSON_DECODER = json.JSONDecoder()
 
 DIAGNOSIS_PROMPT = """
 You are an AIOps incident diagnosis agent.
@@ -149,30 +150,39 @@ def get_related_metrics(metric: str) -> set[str]:
             related.add(m)
     return related
 
-def load_incident_history():
-    incidents = []
-
-    if not INCIDENT_LOG.exists():
-        return incidents
-
-    with open(INCIDENT_LOG) as f:
-        for line in f:
-            incidents.append(json.loads(line))
-
-    return incidents
-
-def load_deploy_history():
-
+def _load_jsonl(path: Path) -> list[dict]:
     events = []
 
-    if not DEPLOY_FILE.exists():
+    if not path.exists():
         return events
 
-    with open(DEPLOY_FILE) as f:
-        for line in f:
-            events.append(json.loads(line))
+    with path.open(encoding="utf-8") as f:
+        for line_number, line in enumerate(f, start=1):
+            remaining = line.strip()
+            while remaining:
+                try:
+                    event, end = _JSON_DECODER.raw_decode(remaining)
+                except json.JSONDecodeError as error:
+                    raise ValueError(
+                        f"Invalid JSON in {path} at line {line_number}, "
+                        f"column {error.colno}: {error.msg}"
+                    ) from error
+
+                if not isinstance(event, dict):
+                    raise ValueError(
+                        f"Expected a JSON object in {path} at line {line_number}"
+                    )
+
+                events.append(event)
+                remaining = remaining[end:].lstrip()
 
     return events
+
+def load_incident_history():
+    return _load_jsonl(INCIDENT_LOG)
+
+def load_deploy_history():
+    return _load_jsonl(DEPLOY_FILE)
 
 def query_deploys(start, end):
 

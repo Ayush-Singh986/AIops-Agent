@@ -44,6 +44,20 @@ The average confidence was `0.572`. Treat this as the system's ranking score, **
 
 **The remediation table is not evidence that this run performed a live repair.** The evaluator automatically resumes approval interruptions as `approved`; that is not a person approving an action. With dry-run enabled, the `app_outage` case's `restart_service` result was `dry_run`, and all other cases proposed `none`. No restart was carried out by this evaluation.
 
+### If diagnosis fails with `JSONDecodeError: Extra data`
+
+The deploy-history reader loads `logs/deploys.jsonl` as JSON Lines. Each line is intended to contain one JSON object, but a pasted traceback showed `Extra data` while parsing this file—evidence that at least one line had additional JSON text after its first object. The history reader now accepts multiple valid, directly concatenated JSON objects on a line, so these existing deploy events no longer abort the evaluation. If the file contains invalid JSON rather than concatenated valid objects, the error reports the file and line to help locate the bad entry. Keep new records newline-delimited; the deploy and rollback scripts already append a newline after each record.
+
+To use the fix on the EC2 checkout, pull the updated repository before rerunning the evaluator:
+
+```bash
+cd ~/AIops-Agent
+git pull
+AIOPS_DRY_RUN=true python -m agent.evaluate_diagnosis
+```
+
+Keep dry-run enabled: the evaluator automatically resumes approval interrupts and is not an interactive human-approval session.
+
 ### What the Compose checks verified
 
 The later `docker compose ps` output showed the app, Nginx proxy, Redis, Prometheus, Grafana, and Locust containers running. The scale test increased the FastAPI service from one to two Compose replicas, and both reported healthy. The rollback test switched both replicas back to the previously preserved image and again reported them healthy. These are single-host Compose checks, not AWS Auto Scaling or proof that the diagnosis evaluator triggered either operation.
