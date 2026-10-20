@@ -126,6 +126,18 @@ The key design choice is to keep the quantitative diagnosis outside the LLM. Sta
 
 These steps deploy the **demo infrastructure**. They do not turn the repository into a production-grade, always-on AIOps platform. Run chaos experiments only on an isolated test server: some experiments stop or stress the application.
 
+### Choose the deployment path before Step 1
+
+Terraform is an **alternative way to create a new AWS server**, not a step to run after the manual setup below:
+
+| Your situation | What to do |
+|---|---|
+| You already created an EC2/Ubuntu server and are following manual Steps 1–7 below | Continue on that server. You do not need Terraform for this deployment. |
+| You want Terraform to create and configure a new AWS server | Start with [Section 9: Terraform deployment](#9-provision-the-aws-demo-infrastructure-with-terraform) **before** manual Step 1. Terraform installs Docker, clones the project, creates the Grafana `.env`, and starts Compose for you. Then use Section 9's Systems Manager and dashboard-access steps. |
+| You already completed manual Steps 1–7 and now want to use Terraform | Do not apply Terraform to the existing server: this configuration creates a **separate EC2 instance**, which may incur additional charges. Use Terraform only if you intentionally want a second/new server or plan to migrate and later remove the manually provisioned one. |
+
+In short, the Terraform route is **Terraform apply → automatic server setup → Systems Manager access → verify/use the running stack → Terraform destroy when finished**. It replaces the manual server creation/setup steps; it is not required to run the application you have already deployed.
+
 ### Before you begin
 
 - An Ubuntu 22.04/24.04 server with outbound internet access.
@@ -331,6 +343,8 @@ docker compose up -d
 Terraform provisions a cost-conscious demo host in **US East (N. Virginia), `us-east-1`**, by default. It creates a single EC2 instance for the Docker Compose stack, encrypted storage, and AWS Systems Manager access. The instance security group has no inbound rules: do not expect to connect directly to its public IP or open SSH, Grafana, Prometheus, or Locust to the internet.
 
 This is demo infrastructure, not a highly available or production-hardened deployment. AWS charges apply while resources are running; check current regional pricing before applying.
+
+**Where this fits:** choose this path before the manual Steps 1–4 in Section 6 if you want Terraform to create a new host. Terraform performs those installation and Compose startup tasks automatically. If you already completed Section 6 on an existing host, do not apply this configuration unless you intentionally want an additional EC2 instance.
 
 ### Prerequisites
 
