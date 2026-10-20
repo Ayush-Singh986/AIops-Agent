@@ -84,34 +84,92 @@ The service and monitoring stack can run continuously, but the diagnosis evaluat
 
 ## Architecture
 
-The diagram below shows the project at a glance. For the detailed code-mapped workflow, data handoffs, and runtime notes, see **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+The diagram separates the **running demo stack** from the **explicitly started diagnosis/evaluation workflow**. This distinction matters: changing a Grafana chart does not automatically start the agent. For the full interviewer-ready explanation, see **[INTERVIEW_PROJECT_WALKTHROUGH.md](INTERVIEW_PROJECT_WALKTHROUGH.md)**; for code-mapped details, see **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ```mermaid
-flowchart TD
-    A["Docker Compose\nNginx proxy + FastAPI app (1–3 replicas)\nRedis + Prometheus"] --> B["Chaos Injection Harness\nredis_latency · redis_outage · app_outage\ndownstream_latency · downstream_failure\ncpu_spike · memory_leak"]
-    B --> C["Phase 2 — Anomaly Detection\nMAD z-score per metric · CUSUM for slow-drift metrics\n(memory) · persistence filter (3 samples)"]
-    C --> D["Phase 3 — Root-Cause Correlation\nDependency-topology prior · lag cross-correlation\nOnset-timing tiebreaker → ranked candidate list"]
-    D --> E["Phase 4 — LangGraph Diagnosis Agent"]
-
-    subgraph E["Phase 4 — LangGraph Diagnosis Agent"]
-        E1["Evidence-gathering nodes\nmetric analysis · app logs · deploy history\nincident similarity · metric-role classification"]
-        E2["Escalation node\nExpand to topologically\nrelated metrics"]
-        E3["LLM diagnosis node\nAmazon Bedrock Nova Pro, temp=0\naccept / challenge / override top candidate"]
-        E1 --> E3
-        E3 -->|"low confidence"| E2
-        E2 --> E3
+flowchart TB
+    subgraph DEMO["1 · Running demo stack (Docker Compose)"]
+        direction LR
+        TRAFFIC["Locust or API caller"] --> PROXY["Nginx proxy"]
+        PROXY --> APP["FastAPI app<br/>1–3 Compose replicas"]
+        APP --> REDIS[("Redis")]
+        APP --> DOWNSTREAM["Simulated catalog dependency"]
+        CHAOS["Chaos CLI and scripts<br/>Redis / downstream faults<br/>outage / CPU / memory"] -. "controlled test faults" .-> APP
+        CHAOS -.-> REDIS
+        APP --> METRICS["/metrics and structured logs"]
+        METRICS --> PROM[("Prometheus")]
+        PROM --> GRAFANA["Grafana"]
+        APP --> APPLOG[("logs/app.jsonl")]
+        CHAOS --> INCIDENTLOG[("chaos/incidents.log")]
+        DEPLOY["Deployment helper scripts"] --> DEPLOYLOG[("logs/deploys.jsonl")]
     end
 
-    E3 --> F{"Remediation\nrestart_service · scale_out\nflush_cache · rollback_deploy · none"}
-    F -->|"low risk"| G["Auto-execute (dry-run in eval)"]
-    F -->|"high risk"| H["Human approval\n(LangGraph interrupt)"]
-    H -->|approved| G
-    H -->|rejected| I["No action"]
+    subgraph EVAL["2 · Explicit diagnosis and evaluation run"]
+        direction TB
+        DATA[("Saved baseline and labeled incident<br/>Parquet datasets")]
+        RUN["python -m agent.evaluate_diagnosis"]
+        DETECT["Anomaly detection<br/>MAD scores + memory CUSUM<br/>+ persistence filter"]
+        RANK["Root-cause ranking<br/>dependency prior + lag correlation<br/>+ onset timing"]
+        STATE["Typed diagnosis state<br/>ranked candidates and incident window"]
+        DATA --> RUN --> DETECT --> RANK --> STATE
+    end
+
+    subgraph AGENT["3 · LangGraph evidence and diagnosis"]
+        direction TB
+        EVIDENCE["Gather evidence<br/>Prometheus metrics · app logs<br/>deploy history · incident history"]
+        DIAGNOSE["Evidence-grounded diagnosis<br/>accept or challenge candidate"]
+        BEDROCK["Amazon Bedrock<br/>configured Nova Pro model"]
+        MORE{"More evidence needed<br/>and iterations remain?"}
+        EXTEND["Inspect related metrics"]
+        DECISION["Diagnosis, confidence,<br/>reasoning, proposed action"]
+        EVIDENCE --> DIAGNOSE
+        DIAGNOSE <--> BEDROCK
+        DIAGNOSE --> MORE
+        MORE -->|"Yes"| EXTEND --> DIAGNOSE
+        MORE -->|"No"| DECISION
+    end
+
+    subgraph SAFE["4 · Safety gate and outcome"]
+        direction LR
+        VALIDATE["Validate allowed action<br/>and dry-run policy"]
+        ACTION{"Action and risk?"}
+        APPROVAL["Human approval<br/>for high-risk actions"]
+        EXECUTE["Supported Compose action<br/>or dry-run"]
+        NOOP["No action"]
+        RESULT["Evaluation report<br/>diagnosis + remediation status"]
+        VALIDATE --> ACTION
+        ACTION -->|"none / rejected"| NOOP --> RESULT
+        ACTION -->|"high risk"| APPROVAL
+        APPROVAL -->|"approved"| EXECUTE --> RESULT
+        APPROVAL -->|"rejected"| NOOP
+        ACTION -->|"low risk"| EXECUTE
+    end
+
+    STATE --> EVIDENCE
+    PROM -. "queried during diagnosis" .-> EVIDENCE
+    APPLOG -.-> EVIDENCE
+    DEPLOYLOG -.-> EVIDENCE
+    INCIDENTLOG -.-> EVIDENCE
+    DECISION --> VALIDATE
+    NOTE["Important: Compose telemetry can be live, but the evaluator starts from saved Parquet incidents. This is not yet an always-on alert consumer."]
+    DATA -.-> NOTE
 ```
+
+### How to read this diagram
+
+1. **The demo creates observable behavior.** Locust or a caller sends requests through Nginx to the FastAPI service, which uses Redis and a simulated dependency. Prometheus scrapes metrics; Grafana visualizes them. Chaos scripts inject controlled faults and record their metadata.
+2. **The evaluator starts a separate diagnosis run.** `python -m agent.evaluate_diagnosis` reads saved baseline and labeled incident Parquet data. The detector identifies sustained metric anomalies using MAD-based scoring and a CUSUM path for gradual memory growth.
+3. **The statistical pipeline ranks causes.** A dependency prior, lagged correlation, and onset timing rank candidate root causes before the LLM is involved.
+4. **The LangGraph agent checks evidence.** It gathers metric summaries and nearby application, deployment, and incident history. Amazon Bedrock helps explain or challenge the statistical candidate using that evidence; it does not independently inspect all raw telemetry or directly control infrastructure.
+5. **A safety boundary controls any action.** The workflow validates a restricted action set, defaults to dry-run, and pauses high-risk actions for approval in interactive runs. The evaluator itself auto-approves graph interrupts, so it must stay in dry-run mode.
+
+The Compose `scale_out` action is a bounded **single-host demo operation** (up to three replicas), not AWS Auto Scaling or production autoscaling.
 
 For the detailed methodology behind each phase — detection formulas, correlation math, evidence-gathering design, and the full case studies — see **[METHODOLOGY.md](METHODOLOGY.md)**.
 
 For a plain-English interview walkthrough, project Q&A, and step-by-step Ubuntu server deployment instructions, see **[INTERVIEW_AND_DEPLOYMENT_GUIDE.md](INTERVIEW_AND_DEPLOYMENT_GUIDE.md)**.
+
+For a first-person, start-to-finish presentation script you can use in an interview, see **[INTERVIEW_PROJECT_WALKTHROUGH.md](INTERVIEW_PROJECT_WALKTHROUGH.md)**.
 
 For a detailed code walkthrough, an explanation of the live monitoring screenshots, and the diagnosis evaluator output, see **[EXPLAINED_README.md](EXPLAINED_README.md)**.
 
