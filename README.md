@@ -50,6 +50,29 @@ The later `docker compose ps` output showed the app, Nginx proxy, Redis, Prometh
 
 The pasted command `curl -fsS http://http://34.235.132.35:8000/health` has a duplicated `http://`, so it is malformed and does not validate the public endpoint. A subsequent request to `http://127.0.0.1:8000/health` on the EC2 host returned `{"status":"healthy"}`, confirming the local health route after rollback. The Terraform deployment intentionally has no public inbound rules; use SSM port forwarding rather than exposing the app, Grafana, Prometheus, Locust, or unauthenticated chaos endpoints to the internet. See the [Terraform connection instructions](terraform/README.md).
 
+### How to read the latest `/metrics` output
+
+The pasted metrics snapshot is a Prometheus text-format scrape from **one FastAPI app process**. It records activity since that process started; it is not a time-bounded report or a cluster-wide total. Counters only increase until the process restarts, while histogram buckets are cumulative.
+
+| Metric in the snapshot | Observed value | What it tells you |
+|---|---:|---|
+| `http_request_total{endpoint="/items/{item_id}",method="GET",http_status="200"}` | 111 | 111 successful item reads had been served by this process. |
+| `http_request_total{endpoint="/items",method="POST",http_status="201"}` | 20 | 20 item-creation requests succeeded. |
+| `http_request_total{endpoint="/health",method="GET",http_status="200"}` | 57 | 57 health checks succeeded. |
+| `http_request_total{endpoint="/",method="GET",http_status="404"}` | 1 | The root request in this snapshot returned 404. This scrape predates deployment of the `/` information route added in this repository; rebuild/redeploy the app image before expecting `/` to return service information. |
+| `http_request_duration_seconds` | GET item: 111 observations, ~0.735 s total; health: 57, ~0.049 s; POST item: 20, ~0.031 s | Dividing sum by count gives approximate averages of **6.62 ms**, **0.86 ms**, and **1.57 ms**, respectively. Histogram buckets show how many observations fell at or below each latency boundary. They are cumulative, so bucket values should not be added together. |
+| `redis_request_duration_seconds` | GET: 111 observations, ~0.048 s total; SET: 20, ~0.009 s total | Approximate average Redis operation latency was **0.43 ms** for GET and **0.45 ms** for SET in this process. |
+| `cache_request_total{outcome="hit"}` | 111 | All 111 recorded item reads were cache hits in this snapshot. No miss or error series appeared in the excerpt. |
+| `downstream_calls_total{dependency="catalog-service",outcome="success"}` | 111 | The app recorded 111 successful calls to its simulated catalog dependency. |
+| `downstream_call_duration_seconds` | 111 observations, ~0.587 s total | Approximate average downstream-call latency was **5.29 ms**. |
+| `process_resident_memory_bytes` | ~56.4 MB | Resident memory (RAM) used by the scraped process at scrape time. |
+| `process_virtual_memory_bytes` | ~142.1 MB | Virtual address-space size; this is not the same as RAM usage. |
+| `process_cpu_seconds_total` | 1.69 s | Cumulative CPU time since the process started, not CPU percentage. Compare its rate over time to estimate current CPU use. |
+| `process_open_fds` / `process_max_fds` | 12 / 1024 | Open file descriptors at scrape time versus the process limit. |
+| `python_info` | CPython 3.11.17 | Runtime metadata for the process that produced this scrape. |
+
+The shown request, cache, and dependency values look healthy for the observed sample, but one scrape cannot establish ongoing health or prove the system is free of incidents. Use Prometheus queries over time and compare application metrics with fault-injection timestamps. If the Compose service has multiple replicas, inspect the Prometheus target list and each target separately; this excerpt represents the responding process and should not automatically be read as the sum across replicas.
+
 ## Demo
 
 **Dashboard** — Grafana panel showing request latency, error rate, and Redis latency visibly responding during a live chaos fault injection. Shows the monitored system is a real running service with real telemetry, not synthetic data generated after the fact.
