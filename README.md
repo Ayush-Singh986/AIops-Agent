@@ -40,7 +40,7 @@ The pasted run was started with `AIOPS_DRY_RUN=true python -m agent.evaluate_dia
 
 In this run, **8 of 10 diagnoses were correct (80%)**. The agent changed its Phase 3 candidate twice; one override corrected the diagnosis (`downstream_latency_fdc80266`) and one did not (`cpu_spike`). Phase 3 agreement was also 80%: agreement means the LLM kept the statistical candidate, not necessarily that the diagnosis was correct. The memory leak remained misdiagnosed even though both stages chose the same downstream-latency candidate.
 
-The average confidence was `0.572`. Treat this as the system's ranking score, **not** as a calibrated 57.2% probability. The agent asked for additional evidence in 4 of 10 cases, reached its three-iteration limit in 4 of 10, and averaged 2.00 iterations. These values can vary between runs as LLM responses and live Prometheus evidence change.
+The average confidence was `0.572`. Treat this as the system's ranking score, **not** as a calibrated 57.2% probability. In this latest rerun, the agent asked for additional evidence in 4 of 10 cases, reached its three-iteration limit in 3 of 10, and averaged 1.70 iterations. Compared with the earlier captured run, the diagnosis outcomes and accuracy stayed the same; the iteration statistics changed. These values can vary between runs as LLM responses and live Prometheus evidence change.
 
 **The remediation table is not evidence that this run performed a live repair.** The evaluator automatically resumes approval interruptions as `approved`; that is not a person approving an action. With dry-run enabled, the `app_outage` case's `restart_service` result was `dry_run`, and all other cases proposed `none`. No restart was carried out by this evaluation.
 
