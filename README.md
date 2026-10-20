@@ -65,7 +65,7 @@ For the detailed methodology behind each phase — detection formulas, correlati
 
 For a plain-English interview walkthrough, project Q&A, and step-by-step Ubuntu server deployment instructions, see **[INTERVIEW_AND_DEPLOYMENT_GUIDE.md](INTERVIEW_AND_DEPLOYMENT_GUIDE.md)**.
 
-For a detailed code walkthrough and an explanation of the diagnosis evaluator output, see **[EXPLAINED_README.md](EXPLAINED_README.md)**.
+For a detailed code walkthrough, an explanation of the live monitoring screenshots, and the diagnosis evaluator output, see **[EXPLAINED_README.md](EXPLAINED_README.md)**.
 
 For a cost-conscious AWS deployment using Terraform and a single EC2 instance, see **[terraform/README.md](terraform/README.md)**.
 

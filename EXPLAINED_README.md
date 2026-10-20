@@ -179,6 +179,40 @@ The app exposes operational metrics to Prometheus. These are the signals the det
 
 These metrics are collected continuously and become the evidence base for anomaly detection.
 
+### Understanding the live Prometheus and Locust screenshots
+
+These screenshots show the monitoring and traffic-generation parts of the demo working:
+
+![Prometheus shows the aiops-app metrics endpoint as up](docs/live-prometheus-target-health.png)
+
+Prometheus lists `aiops-app` as **1 / 1 up**. It successfully scraped `http://aiops-app:8000/metrics/`; the screenshot shows a five-second scrape interval and a four-millisecond scrape duration. This confirms that Prometheus can reach and collect the app's metrics endpoint. It does **not** prove that every app request is healthy or that an incident has been diagnosed.
+
+![Locust running a one-user test against the app](docs/live-locust-running.png)
+
+Locust is the load generator: it sends requests to the app and reports what happened. In this snapshot, the test is running with **one virtual user**, about **0.8 requests per second**, and **0% failures**. A virtual user is a simulated client, not a real person.
+
+![Locust response-time and virtual-user charts](docs/live-locust-metrics.png)
+
+The charts show response-time percentiles and the number of active Locust virtual users over time. Most response times are low, with brief spikes near **500 ms**. The virtual-user count briefly falls to zero and then returns to one. These are observations from this test run; the charts alone cannot identify why a spike or pause happened. Compare their timestamps with the app logs, Prometheus metrics, and chaos-experiment log before attributing them to a particular fault.
+
+### How these live screens relate to diagnosis
+
+The pieces fit together like this:
+
+```text
+Locust sends requests ──> FastAPI app ──> Redis / downstream dependency
+                              │
+                              └── /metrics ──> Prometheus scrapes and stores metrics
+
+Saved incident telemetry ──> detector ──> root-cause ranking
+                                             └──> LangGraph / Bedrock diagnosis
+                                                   └──> remediation decision
+```
+
+Prometheus collection and Locust traffic happen while the demo stack is running. The diagnosis evaluation is a separate, explicitly run workflow that replays saved incident telemetry; the live dashboards do not automatically trigger a new diagnosis whenever a graph changes. The agent can also gather live Prometheus evidence during a diagnosis run, but that is not the same as an always-on alert-to-remediation service.
+
+> **Security warning:** The original screenshots were captured by opening Prometheus and Locust through the server's public IP. These demo interfaces, as well as the chaos endpoints, do not provide authentication. Do not leave their ports publicly reachable. Remove public inbound rules or restrict access and use the Systems Manager port-forwarding approach in the [Terraform guide](terraform/README.md). The screenshots in this repository are cropped to omit the public IP and AWS account header.
+
 ---
 
 ## 4) Statistical anomaly detection
@@ -473,18 +507,41 @@ The project compares:
 
 The documentation states that the combined pipeline improves accuracy over the naive and statistical-only approaches, which is the core claim of the project.
 
-### Understanding the latest `agent.evaluate_diagnosis` output
+### Understanding your `agent.evaluate_diagnosis` screenshots
 
-The pasted run shows the complete evaluator finishing all 10 labeled incidents. Here is what its output means:
+In the screenshots, the evaluator finished all 10 labeled incidents. Think of it as a test: each Parquet file contains telemetry from a known, injected fault. The program predicts a root-cause metric, then compares that prediction with the known expected metric. It is replaying saved incidents; it is not currently watching new production alerts continuously.
+
+Here is what the output means:
 
 - **`Root cause candidate: ... prior=... corr=... onset=... conf=...`** is Phase 3's statistical ranking. `prior` measures whether the dependency map says the candidate can explain other anomalous metrics; `corr` measures lagged correlation; `onset` rewards earlier detected deviation. The combined score is `0.5 * prior + 0.35 * corr + 0.15 * onset`. The highest confidence is Phase 3's leading hypothesis, not a guaranteed answer.
-- **`nova_pro latency: ...`** means the Bedrock request completed and reports its duration. In this pasted run, the earlier `NoCredentialsError` is no longer occurring. If that error returns, the EC2 instance still needs an attached IAM role with `bedrock:InvokeModel` permission for the configured model. Adding code to GitHub alone does not attach AWS permissions to an existing instance.
+- **`conf` / `Average Confidence: 0.572`** is the system's score, not a calibrated probability. A score of `0.572` does not mean there is a verified 57.2% chance the diagnosis is right.
+- **`nova_pro latency: ...`** means the Amazon Bedrock request completed and reports its duration. Your successful full run shows that the earlier `NoCredentialsError` is no longer stopping this evaluation. If that error returns, the EC2 instance still needs an attached IAM role with `bedrock:InvokeModel` permission for the configured model. Adding code to GitHub alone does not attach AWS permissions to an existing instance.
 - **`Escalation decision: True`** means the agent asked its graph to gather related metric evidence and try diagnosis again. `False` means it will not escalate that attempt. The graph limits diagnosis iterations.
 - **`Expected`** is the labeled ground-truth metric for the injected fault. **`Phase3`** is the statistical top candidate. **`LLM`** is the agent's final diagnosis after considering evidence. An LLM answer can differ from both the expected label and Phase 3.
 - **`Ground Truth Accuracy: 80.00%`** means 8 of the 10 labeled cases in this run matched the expected root cause. It is a small sample: each incident changes the score by 10 percentage points. It is not a promise of 80% accuracy in production.
+- **`Agreement with Phase 3: 80.00%`** means the LLM returned the same metric as the statistical ranking for 8 of 10 incidents. Agreement is not the same as correctness: both stages can agree on the wrong answer.
 - **`LLM Overrides: 2` / `Correct Overrides: 1`** means the agent changed the Phase 3 answer twice; only one change corrected the ground-truth diagnosis. In this run, CPU spike was diagnosed as Redis latency, and the memory leak was diagnosed as downstream latency. The downstream-latency case where Phase 3 favored memory was corrected by the LLM; the CPU-spike ambiguity remains unresolved.
-- **`Evidence escalation: 6/10`** means six of the ten incidents asked the graph to collect additional evidence at least once.
-- In the remediation table, **`action: none`** means no repair was selected for that case, so the blank/`NaN` remediation status means no command was executed. The app-outage case selected `restart_service` and reports `executed`.
+- **`Average Iterations`, `Evidence escalation`, and `Maximum iteration cases`** describe how often the agent queried more evidence before finishing. Your screenshots report average iterations of `1.90`, evidence escalation for `5/10` incidents, and `4/10` incidents reaching the iteration limit. A different successful run in the earlier pasted output reported `2.30`, `6/10`, and `6/10`; these can vary with LLM answers and live Prometheus evidence.
+- In the remediation table, **`action: none`** means no repair was selected for that case, so the blank/`NaN` remediation status means no command was executed. `approval_status: approved` by itself does not mean a person approved an action; for `none`, there is no action to approve. The app-outage case selected `restart_service` and reports `executed`.
+
+#### Reading the confusion matrix in your screenshot
+
+Rows are the **expected** root causes; columns are the **predicted** root causes. Each cell counts incidents. Correct predictions are on the diagonal:
+
+| Expected root cause | Predicted root cause | Cases |
+|---|---|---:|
+| `app_availability` | `app_availability` | 1 |
+| `downstream_average_latency_seconds` | `downstream_average_latency_seconds` | 3 |
+| `downstream_error_rate` | `downstream_error_rate` | 1 |
+| `process_cpu_rate` | `redis_average_latency_seconds` | 1 |
+| `process_resident_memory_bytes` | `downstream_average_latency_seconds` | 1 |
+| `redis_average_latency_seconds` | `redis_average_latency_seconds` | 3 |
+
+There are 10 cases total. The diagonal adds up to 8, so accuracy is 8 ÷ 10 = **80%**. The two off-diagonal cases are the CPU-spike incident and the memory-leak incident. The first was mistaken for Redis latency; the second for downstream latency. These are real errors, not successful detections.
+
+#### What this says about the project
+
+The evaluator does not let the LLM examine every raw time series and independently discover an answer. The statistical detector first finds unusual metrics; the topology/correlation logic ranks possible causes; then the LangGraph agent gathers context and asks Bedrock to choose or challenge a candidate. Finally, the system selects an action or does nothing. This structure makes the reasoning measurable, but the screenshots also show its limits: the answer can still be wrong, and 10 test cases are not enough to prove production reliability.
 
 #### Important: the evaluator actually restarted the app
 
