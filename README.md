@@ -60,7 +60,25 @@ Keep dry-run enabled: the evaluator automatically resumes approval interrupts an
 
 ### What the Compose checks verified
 
-The later `docker compose ps` output showed the app, Nginx proxy, Redis, Prometheus, Grafana, and Locust containers running. The scale test increased the FastAPI service from one to two Compose replicas, and both reported healthy. The rollback test switched both replicas back to the previously preserved image and again reported them healthy. These are single-host Compose checks, not AWS Auto Scaling or proof that the diagnosis evaluator triggered either operation.
+The screenshots below document the manual deployment, scale-out, and rollback checks on the EC2 Compose host. After rollback, the app, Nginx proxy, Redis, Prometheus, Grafana, and Locust containers were running. The scale test increased the FastAPI service from two to three Compose replicas, and all three reported healthy. The rollback test switched all three replicas back to the previously preserved image and again reported them healthy. These are single-host Compose checks, not AWS Auto Scaling or proof that the diagnosis evaluator triggered either operation. Docker's `0.0.0.0` port bindings in `docker compose ps` describe host-level bindings only; the Terraform security group still has no inbound rules, so access should use SSM port forwarding.
+
+#### Deploying the updated app image
+
+![EC2 terminal showing git pull, deployment build, and two healthy FastAPI replicas](docs/ec2-deploy-compose.png)
+
+The deployment helper builds a tagged app image and starts the replacement containers while preserving the existing replica count. The output shows the build completed and both app replicas passed their health checks. It also shows the deploy-history entries created by the deployment and rollback scripts.
+
+#### Scaling the Compose service to three replicas
+
+![EC2 terminal showing scale-out to three healthy FastAPI replicas](docs/ec2-scale-three-replicas.png)
+
+The scale helper adds one app replica, increasing the service from two to three. Docker Compose reports **Running 3/3** and all three replicas as healthy. This is bounded scaling on one EC2 host.
+
+#### Rolling back while retaining three replicas
+
+![EC2 terminal showing rollback to the saved image with three healthy replicas](docs/ec2-rollback-three-replicas.png)
+
+The rollback helper restores the saved pre-deployment app image without reducing the replica count. All three replicas report healthy after rollback. The Prometheus, Grafana, Locust, Redis, and Nginx containers remain part of the same Compose demo stack.
 
 The pasted command `curl -fsS http://http://34.235.132.35:8000/health` has a duplicated `http://`, so it is malformed and does not validate the public endpoint. A subsequent request to `http://127.0.0.1:8000/health` on the EC2 host returned `{"status":"healthy"}`, confirming the local health route after rollback. The Terraform deployment intentionally has no public inbound rules; use SSM port forwarding rather than exposing the app, Grafana, Prometheus, Locust, or unauthenticated chaos endpoints to the internet. See the [Terraform connection instructions](terraform/README.md).
 
