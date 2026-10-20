@@ -71,6 +71,12 @@ resource "aws_iam_role_policy_attachment" "ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+resource "aws_iam_role_policy" "bedrock" {
+  name   = "${var.project_name}-bedrock-nova-pro"
+  role   = aws_iam_role.instance.id
+  policy = file("${path.module}/bedrock-policy.json")
+}
+
 resource "aws_iam_instance_profile" "instance" {
   name = "${var.project_name}-instance"
   role = aws_iam_role.instance.name

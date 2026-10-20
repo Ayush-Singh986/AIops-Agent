@@ -281,7 +281,7 @@ The agent imports the application logger, which requires `LOG_FILE`. Set it to t
 export LOG_FILE="$PWD/logs/app.jsonl"
 ```
 
-The Prometheus client in the detector expects Prometheus at `http://localhost:9090`, so run the agent on the Docker host with the stack active. The Bedrock client in `agent/llm.py` is configured for `ap-south-1` and Amazon Nova Pro. Set `AWS_DEFAULT_REGION=ap-south-1` and provide AWS credentials using an instance role or another secure AWS credential provider. Do not put credentials in source control or a committed `.env` file.
+The Prometheus client in the detector expects Prometheus at `http://localhost:9090`, so run the agent on the Docker host with the stack active. The Bedrock client defaults to the Nova Pro US inference profile in `us-east-1`; override it with `AWS_REGION` and `BEDROCK_MODEL_ID` only when using a matching region and model. On EC2, provide access through an attached instance profile that allows `bedrock:InvokeModel` for the model. For the Terraform deployment, this narrowly scoped permission is provisioned by `terraform/bedrock-policy.json`. For an existing manually created EC2 instance, create and attach an EC2 role with the policy in that file (see [`terraform/README.md`](terraform/README.md)); add it to the existing role if the instance already uses one. Locally, use an AWS CLI profile or another secure AWS credential provider. Never put AWS access keys in source control or a committed `.env` file.
 
 Before running the full agent evaluator, read the safety warning below. The detector/root-cause evaluation does not invoke remediation:
 
@@ -331,7 +331,8 @@ docker compose up -d
 | Grafana has no charts | Add the Prometheus data source at `http://prometheus:9090`; dashboards are not provisioned by this repository. |
 | Chaos runner cannot reach the app | Run it on the Docker host, from the project root, and verify `http://127.0.0.1:8000/health`. |
 | Diagnosis fails before calling the model | Check that the virtual environment is active, `LOG_FILE` is set, Prometheus is running, and the command is executed from the repository root. |
-| Bedrock returns an authorization or model error | Check the AWS identity, Bedrock model access, region, and `AWS_DEFAULT_REGION`. Never paste credentials into logs or source files. |
+| Bedrock reports `NoCredentialsError` / “Unable to locate credentials” | Attach an EC2 instance profile with `bedrock:InvokeModel` permission for the configured model, or configure a secure AWS profile for local runs. Verify the active identity with `aws sts get-caller-identity`; never paste access keys into source files. |
+| Bedrock returns an authorization or model error | Check the AWS identity, the model's availability/access in the selected region, the `AWS_REGION` setting, and the resource scope in the attached IAM policy. Never paste credentials into logs or source files. |
 | Remediation command fails | Check that Docker is available to the Python process and that it runs from the Compose project directory. Keep `DRY_RUN=True` while troubleshooting diagnosis. |
 
 ## 8. A good closing answer in an interview

@@ -7,7 +7,7 @@ This Terraform configuration runs the existing Docker Compose demo on one Ubuntu
 - One VPC and public subnet, with no NAT Gateway (which would add ongoing hourly and data-processing charges).
 - One EC2 instance. The default is `t3a.small` with 2 vCPUs and 2 GiB RAM; change to `t3a.medium` if the five-container stack runs short of memory.
 - One encrypted 20 GiB gp3 root disk, deleted with the instance.
-- An instance role with `AmazonSSMManagedInstanceCore` for AWS Systems Manager access.
+- An instance role with `AmazonSSMManagedInstanceCore` for AWS Systems Manager access and a narrowly scoped `bedrock:InvokeModel` permission for the Nova Pro US inference profile.
 - A security group with **no inbound rules**. SSH, the app, Grafana, Prometheus, and Locust are not exposed publicly.
 - First-boot setup that installs Docker Compose, clones the configured public Git repository, and starts the stack.
 
@@ -20,7 +20,20 @@ The public IPv4 address is needed for outbound internet access without a NAT Gat
 3. Terraform 1.5 or newer.
 4. AWS Session Manager plugin installed on your workstation to open shell and port-forwarding sessions.
 
-The EC2 instance needs outbound internet access to install operating-system packages, reach Systems Manager, and pull Docker images and the public repository. No AWS keys, GitHub tokens, or Bedrock credentials are placed in Terraform or user data. The instance role is only given the managed Systems Manager core policy; it does not grant Bedrock access.
+The EC2 instance needs outbound internet access to install operating-system packages, reach Systems Manager and Amazon Bedrock, and pull Docker images and the public repository. No AWS keys, GitHub tokens, or Bedrock credentials are placed in Terraform or user data. Terraform grants the instance role access only to invoke the configured Nova Pro US inference profile; see [`bedrock-policy.json`](bedrock-policy.json).
+
+For an already-running EC2 instance created outside this Terraform configuration:
+
+1. In AWS IAM, create a policy from [`bedrock-policy.json`](bedrock-policy.json).
+2. Make sure the EC2 instance has an IAM role trusted by the EC2 service. Attach the new policy to that role. If the instance already has a role for Systems Manager, add the policy to that existing role rather than replacing it.
+3. In the EC2 console, select the instance and choose **Actions → Security → Modify IAM role**, then attach the role. Role changes do not require putting credentials on the server.
+4. On the instance, verify the role is visible and configured:
+
+   ```bash
+   python -c 'import boto3; print(boto3.client("sts", region_name="us-east-1").get_caller_identity()["Arn"])'
+   ```
+
+Do not add access keys to the project or shell startup files. Bedrock model availability/entitlement in the account and selected region is separate from IAM credentials and must also be enabled.
 
 ## Deploy
 

@@ -1,14 +1,18 @@
+import os
 import time
 import requests
 import boto3
 from botocore.config import Config
+from botocore.exceptions import NoCredentialsError
 
 
-LLM_PROVIDER = "nova_pro"  # Options: "ollama", "nova_lite", "nova_pro", "llama3"
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "nova_pro").lower()
+AWS_REGION = os.getenv("AWS_REGION", os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
+BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "us.amazon.nova-pro-v1:0")
 
 bedrock = boto3.client(
     "bedrock-runtime",
-    region_name="ap-south-1",
+    region_name=AWS_REGION,
     config=Config(
         read_timeout=120
     )
@@ -18,7 +22,7 @@ MODELS = {
 
     "nova_lite": "global.amazon.nova-2-lite-v1:0",
     "llama3" : "meta.llama3-70b-instruct-v1:0",
-    "nova_pro": "apac.amazon.nova-pro-v1:0",
+    "nova_pro": BEDROCK_MODEL_ID,
 }
 
 
@@ -63,24 +67,32 @@ def call_ollama(prompt: str):
 
 
 def call_bedrock(prompt: str, model_id: str):
-    response = bedrock.converse(
-        modelId=model_id,
-        messages=[
-            {
-                "role":"user",
-                "content":[
-                    {
-                        "text":prompt
-                    }
-                ]
+    try:
+        response = bedrock.converse(
+            modelId=model_id,
+            messages=[
+                {
+                    "role":"user",
+                    "content":[
+                        {
+                            "text":prompt
+                        }
+                    ]
+                }
+            ],
+            inferenceConfig={
+                "maxTokens":700,
+                "temperature":0,
+                "topP":1
             }
-        ],
-        inferenceConfig={
-            "maxTokens":700,
-            "temperature":0,
-            "topP":1
-        }
-    )
+        )
+    except NoCredentialsError as exc:
+        raise RuntimeError(
+            "AWS credentials were not found. On EC2, attach an instance role "
+            "that allows bedrock:InvokeModel for the configured model. "
+            "For local runs, configure an AWS profile or another secure "
+            "AWS credential provider; do not put access keys in source code."
+        ) from exc
 
     return (
         response["output"]
