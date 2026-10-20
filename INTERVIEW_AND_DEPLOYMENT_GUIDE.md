@@ -2,7 +2,7 @@
 
 This guide explains the project in plain English, gives you a presentation you can use in an interview, and walks through deploying the demo stack on a Linux server.
 
-For the detailed design and evaluation methodology, see [METHODOLOGY.md](./METHODOLOGY.md). The existing [README.md](./README.md) is the short project overview.
+This is the complete project and deployment guide. The [README.md](./README.md) is the short overview and links back here for the end-to-end explanation, interview material, evaluation details, and deployment instructions.
 
 ## 1. The real-world problem
 
@@ -63,7 +63,6 @@ For this Compose demo, an Nginx proxy routes requests to the app so Compose can 
 | [data/](./data/) | Baseline telemetry and labeled incident datasets used for evaluation |
 | [prometheus/prometheus.yml](./prometheus/prometheus.yml) | Prometheus scrape configuration |
 | [docker-compose.yml](./docker-compose.yml) | Demo application and observability stack |
-| [METHODOLOGY.md](./METHODOLOGY.md) | Detection, correlation, evaluation results, case studies, and production limitations |
 
 ## 5. Interview questions and example answers
 
@@ -124,7 +123,242 @@ For this Compose demo, an Nginx proxy routes requests to the app so Compose can 
 **Q: What would you monitor about the AIOps system itself?**  
 **A:** Detection latency, alert precision/recall, diagnosis accuracy after human review, confidence calibration, evidence-source availability, LLM latency/errors/cost, approval and rejection rates, remediation success, recovery time, and any unintended side effects.
 
-## 6. Deploy the demo stack on an Ubuntu server
+## 6. Technical deep dive, evaluation, and project evidence
+
+This section brings the architecture, statistical methodology, evaluation output, screenshots, and future-work priorities together so this guide can be used on its own.
+
+### Architecture at a glance
+
+```mermaid
+flowchart TB
+    subgraph DEMO["1. Docker Compose demo"]
+        USER["Locust or API caller"] --> PROXY["Nginx proxy"]
+        PROXY --> APP["FastAPI app replicas (1-3)"]
+        APP --> REDIS[("Redis")]
+        APP --> DOWNSTREAM["Simulated catalog dependency"]
+        CHAOS["Chaos runner and fault scripts"] -. "controlled faults" .-> APP
+        CHAOS -.-> REDIS
+        APP --> METRICS["/metrics and structured logs"]
+        METRICS --> PROM[("Prometheus")]
+        PROM --> GRAFANA["Grafana"]
+        APP --> APPLOG[("logs/app.jsonl")]
+        CHAOS --> INCIDENTLOG[("chaos/incidents.log")]
+        DEPLOY["Deployment helper scripts"] --> DEPLOYLOG[("logs/deploys.jsonl")]
+    end
+
+    subgraph EVALUATION["2. Explicit dataset evaluation"]
+        DATA[("Saved baseline and labeled incident Parquet files")]
+        RUN["python -m agent.evaluate_diagnosis"]
+        DETECT["MAD detection; memory CUSUM; persistence"]
+        RANK["Root-cause ranking: topology, lag correlation, onset"]
+        STATE["Typed diagnosis state"]
+        DATA --> RUN --> DETECT --> RANK --> STATE
+    end
+
+    subgraph AGENT["3. LangGraph evidence and reasoning"]
+        EVIDENCE["Metrics, app logs, deploy history, incident history"]
+        DIAGNOSE["Evidence-grounded diagnosis"]
+        BEDROCK["Amazon Bedrock Nova Pro"]
+        MORE{"Need more evidence and iterations remain?"}
+        EXTEND["Inspect related metrics"]
+        RESULT["Diagnosis, confidence, explanation, proposed action"]
+        EVIDENCE --> DIAGNOSE
+        DIAGNOSE <--> BEDROCK
+        DIAGNOSE --> MORE
+        MORE -->|"Yes"| EXTEND --> DIAGNOSE
+        MORE -->|"No"| RESULT
+    end
+
+    subgraph SAFETY["4. Safety and outcome"]
+        VALIDATE["Validate action and dry-run policy"]
+        ACTION{"Action and risk?"}
+        APPROVAL["Approval interrupt for high-risk actions"]
+        EXECUTE["Supported Compose action or dry-run"]
+        NOOP["No action"]
+        REPORT["Evaluation result"]
+        VALIDATE --> ACTION
+        ACTION -->|"high risk"| APPROVAL
+        APPROVAL -->|"approved"| EXECUTE --> REPORT
+        APPROVAL -->|"rejected"| NOOP --> REPORT
+        ACTION -->|"low risk"| EXECUTE
+        ACTION -->|"none"| NOOP
+    end
+
+    STATE --> EVIDENCE
+    PROM -. "queried during diagnosis" .-> EVIDENCE
+    APPLOG -.-> EVIDENCE
+    DEPLOYLOG -.-> EVIDENCE
+    INCIDENTLOG -.-> EVIDENCE
+    RESULT --> VALIDATE
+```
+
+**Important:** the Compose services and metrics can be live, but the current evaluation begins from saved Parquet telemetry. The graph may query live Prometheus and local logs for evidence after it starts. Grafana changes do not trigger an evaluation, and there is not yet an always-on alert consumer.
+
+### What the detector measures and how it works
+
+The documented detector tracks nine signals: request rate, application p95 latency, application error rate, Redis average latency, cache error rate, downstream average latency, downstream error rate, process CPU rate, and process resident memory.
+
+For most metrics, the detector uses a rolling modified z-score:
+
+```text
+score = 0.6745 * |value - rolling_median| / rolling_MAD
+```
+
+The rolling reference is lagged so the current point does not influence its own baseline. Windows and thresholds vary by metric because latency, request rates, and errors have different normal variability. Process memory uses an upward CUSUM path because a leak is gradual drift:
+
+```text
+s_pos = max(0, s_pos + z - k)
+```
+
+A persistence filter requires three consecutive flagged observations. At the documented 30-second evaluation resolution, that is roughly 90 seconds of sustained deviation. This suppresses transient noise but can miss faults shorter than the persistence window; that is an explicit precision/recall tradeoff.
+
+The documented baseline false-alarm rate was approximately 9–10% of timeline windows (the fraction of 30-second windows with any false alarm across the monitored metrics). This is a prototype-specific measurement, not a target or production guarantee. The detector uses a small lag window for pairwise cross-correlation (±4 samples, or about ±2 minutes at 30-second resolution). Metric-specific windows and thresholds matter because a jittery latency signal should not be treated exactly like an error-rate signal.
+
+### How root-cause candidates are ranked
+
+When multiple signals are abnormal, the candidate score combines:
+
+```text
+confidence = 0.5 * dependency_prior
+           + 0.35 * lag_correlation
+           + 0.15 * onset_timing
+```
+
+- **Dependency prior:** a hand-maintained topology encodes which metrics could plausibly explain others. For example, Redis latency could contribute to app latency, but app latency does not explain Redis latency.
+- **Lag correlation:** compares co-occurring metric behavior over a small time offset; memory's rate of change is used rather than its steadily rising raw value.
+- **Onset timing:** gives weight to when a candidate first changed relative to other anomalous signals.
+
+Application availability is treated as a hard outage signal. A single flagged metric can be the only candidate without a multi-metric ranking. These mechanisms rank hypotheses; they do not establish causation. Confidence is not a calibrated probability.
+
+### What happens inside the LangGraph workflow
+
+The workflow begins with a typed incident state containing the dataset incident window and statistically ranked candidates. Its nodes then:
+
+1. Summarize candidate metric behavior around the incident window using Prometheus.
+2. Read relevant application log records.
+3. Look for nearby deploy events in the local deployment history.
+4. Compare against incident history from the chaos log.
+5. Ask the configured Bedrock Nova Pro model to diagnose from the candidates and evidence.
+6. If more information is needed, inspect related metrics rather than every possible signal; diagnosis retries are bounded (up to three attempts).
+7. Validate the proposed action and route to no-op, dry-run/execution, or a high-risk approval interrupt.
+
+The model is instructed not to invent a cause or treat correlation/onset as proof. Its choice is constrained by the evidence and allowed action set. The documented confidence bound is `min(phase3_confidence + 0.15, llm_confidence)`, so the LLM's stated confidence cannot lift the result arbitrarily above the statistical evidence.
+
+### Remediation boundary and actions
+
+The supported actions are `none`, `flush_cache`, `restart_service`, `scale_out`, and `rollback_deploy`. An action may be rejected or omitted when evidence does not justify it. For example, Redis or downstream latency alone is not sufficient evidence to restart the app.
+
+The higher-risk Compose demonstrations are deliberately narrow:
+
+- `scale_out` adds one FastAPI replica behind Nginx, up to three total, on the same host.
+- `rollback_deploy` restores the previously saved image from the deployment helper and requires deployment history.
+- In an interactive diagnosis graph, high-risk actions pause for approval.
+- `AIOPS_DRY_RUN` defaults to `true`, preventing commands from changing Docker state.
+- **The evaluation harness passes `auto_approve=True` and automatically resumes approval interrupts. Always run it with dry-run enabled; its `approved` status does not mean a human approved an action.**
+- Directly running the deployment helper scripts is a deliberate operator action and does not show that the diagnosis agent chose or approved that action.
+
+This is not production autoscaling, a production rollback controller, or a safe autonomous controller for real services.
+
+### Latest diagnosis evaluation: exact interpretation
+
+The latest shared run scored ten labeled incidents. An unlabeled `memory_spike` dataset was skipped and is not included. Results:
+
+| Incident | Expected root cause | Statistical candidate | Final diagnosis | Result |
+|---|---|---|---|---|
+| `cpu_spike_52dcb84f` | `process_cpu_rate` | `downstream_average_latency_seconds` | `redis_average_latency_seconds` | Incorrect |
+| `downstream_failure_fd739d70` | `downstream_error_rate` | `downstream_error_rate` | `downstream_error_rate` | Correct |
+| `downstream_latency_a00e71c7` | `downstream_average_latency_seconds` | `downstream_average_latency_seconds` | `downstream_average_latency_seconds` | Correct |
+| `app_outage_9fc6ee70` | `app_availability` | `app_availability` | `app_availability` | Correct |
+| `downstream_latency_f222e70b` | `downstream_average_latency_seconds` | `downstream_average_latency_seconds` | `downstream_average_latency_seconds` | Correct |
+| `downstream_latency_fdc80266` | `downstream_average_latency_seconds` | `process_resident_memory_bytes` | `downstream_average_latency_seconds` | Correct; LLM override |
+| `memory_leak_35c25d43` | `process_resident_memory_bytes` | `downstream_average_latency_seconds` | `downstream_average_latency_seconds` | Incorrect |
+| `redis_latency_b50614d5` | `redis_average_latency_seconds` | `redis_average_latency_seconds` | `redis_average_latency_seconds` | Correct |
+| `redis_outage_5742c596` | `redis_average_latency_seconds` | `redis_average_latency_seconds` | `redis_average_latency_seconds` | Correct |
+| `redis_outage_8db2dfbc` | `redis_average_latency_seconds` | `redis_average_latency_seconds` | `redis_average_latency_seconds` | Correct |
+
+| Measure | Latest shared run |
+|---|---:|
+| Statistical pipeline accuracy | 70% (7/10) |
+| Statistical pipeline plus LLM accuracy | 80% (8/10) |
+| Agreement with statistical candidate | 80% (8/10) |
+| Average confidence score | 0.572 |
+| LLM overrides / correct overrides | 2 / 1 |
+| Evidence escalation | 4/10 incidents |
+| Average diagnosis iterations | 1.70 |
+| Cases reaching the three-iteration limit | 3/10 |
+
+The CPU-spike case was mistaken for Redis latency. The memory-leak case was mistaken for downstream latency. In the `downstream_latency_fdc80266` case, Phase 3 favored process memory based on onset, while stronger downstream correlation helped the LLM choose the correct cause. These are meaningful examples of both an override and a remaining failure.
+
+Ten labeled cases are a very small sample; one case moves accuracy by ten percentage points. The 80% result is not a production guarantee. Older screenshots and notes describe earlier runs with different iteration/escalation values, and one earlier run executed a restart. For the latest output, use the figures in the table above: it ran with `AIOPS_DRY_RUN=true`, and the app-outage restart was a dry-run rather than a live restart.
+
+The evaluation command is:
+
+```bash
+AIOPS_DRY_RUN=true python -m agent.evaluate_diagnosis
+```
+
+It also requires the Python agent dependencies, local Prometheus, a configured `LOG_FILE`, and AWS Bedrock access. The root-cause-only command does not call the LLM or invoke remediation:
+
+```bash
+python -m detector.evaluate_rootcause
+```
+
+### Monitoring, metrics, and deployment evidence
+
+Prometheus scrapes the app every five seconds. One documented `/metrics` capture showed, for that process at that moment, 111 successful item reads, 20 successful item writes, 57 health checks, 111 cache hits, 111 successful simulated catalog calls, and approximate average latencies of 6.62 ms for item GET requests, 0.86 ms for health checks, 1.57 ms for item POST requests, 0.43 ms for Redis GETs, 0.45 ms for Redis SETs, and 5.29 ms for downstream calls. Those are cumulative process counters from one snapshot—not a time-window or cluster-wide performance report. The capture also included one earlier root-path 404, before the root information route was added.
+
+The Locust screenshots show a one-user test at about 0.8 requests per second with no failures at the captured moment, plus response-time percentiles with brief spikes around 500 ms. These observations do not identify the cause of a spike by themselves; correlate their timestamps with metrics, logs, and experiment records.
+
+The EC2 screenshots document a separate, operator-driven Compose deployment exercise:
+
+- ![Compose stack starting on EC2](docs/ec2-compose-startup.png)
+- ![Updated image deployed with two healthy app replicas](docs/ec2-deploy-compose.png)
+- ![Compose scaled to three healthy replicas](docs/ec2-scale-three-replicas.png)
+- ![Rollback completed with three healthy replicas](docs/ec2-rollback-three-replicas.png)
+- ![Prometheus target health](docs/live-prometheus-target-health.png)
+- ![Locust one-user test](docs/live-locust-running.png)
+- ![Locust response-time and user charts](docs/live-locust-metrics.png)
+- ![Grafana fault-injection view](docs/grafana-fault-injection-1.png)
+- ![Grafana second fault-injection view](docs/grafana-fault-injection-2.png)
+
+The deployment screenshots show the app progressing to healthy, a helper-driven deployment preserving the replica count, scale-out from two to three replicas, and rollback to the saved image while retaining three healthy replicas. These steps were not triggered by the evaluator. A public-IP curl command shown in an earlier transcript had a duplicated `http://` and is invalid; the valid health check was against `127.0.0.1` on the EC2 host. Terraform intentionally has no inbound security-group rules, so use SSM port forwarding rather than opening the demo ports to the internet.
+
+### Detailed code map
+
+| Directory/file | Responsibility |
+|---|---|
+| `service/main.py`, `service/routes.py` | FastAPI setup, request handlers, Redis/downstream behavior, health and metrics endpoints |
+| `service/chaos_routes.py`, `service/chaos_state.py` | Demo fault-control endpoints and active fault state |
+| `service/metrics.py`, `service/logger.py` | Prometheus metric definitions and structured app logs |
+| `chaos/run_experiments.py`, `chaos/scripts/` | Fault experiment runner and individual fault scenarios |
+| `chaos/incident_logger.py` | Records known injected incident metadata and timing |
+| `detector/mad_detector.py`, `detector/forecast_detector.py` | Anomaly scoring, including MAD and additional residual detection |
+| `detector/metric_queries.py`, `detector/prometheus_api.py` | Prometheus query definitions and retrieval |
+| `detector/evaluate.py`, `detector/evaluate_rootcause.py` | Detection and statistical root-cause evaluation |
+| `detector/rootcause/analysis.py`, `detector/rootcause/topology.py` | Candidate ranking and dependency priors |
+| `agent/build_state.py`, `agent/state.py` | Typed incident state construction and definition |
+| `agent/graph.py`, `agent/tool_nodes.py` | LangGraph execution, evidence tools, escalation, and approval interrupts |
+| `agent/diagnosis.py`, `agent/llm.py`, `agent/utils.py` | Prompting, model calls, confidence logic, and evidence utilities |
+| `agent/remediation.py` | Allowed-action validation, dry-run, and action execution |
+| `agent/evaluate_diagnosis.py` | Full diagnosis evaluator |
+| `data/` | Baseline telemetry and labeled incident Parquet files |
+| `logs/` | Local application and deployment JSONL records |
+| `scripts/` | Environment setup and Compose deploy, scale, and rollback helpers |
+| `terraform/` | Low-cost single-EC2 demo infrastructure with SSM access |
+
+### Production-readiness priorities
+
+The project is currently a lab prototype. A sensible next sequence is:
+
+1. **Safety and reliability:** validate model output against typed schemas; make tool/model failures visible; test approval, action allowlists, dry-run, and remediation failure paths; add structured decision audit records.
+2. **Evaluation quality:** increase labeled incidents and fault variations; track precision/recall, detection delay, top-k root-cause accuracy, confidence calibration, and unsafe-action rate; record dataset/model/config versions for reproducibility.
+3. **Better signals and topology:** add seasonality-aware baselines, missing/stale telemetry checks, and dependency evidence from distributed traces or a service catalog rather than a hand-maintained table.
+4. **Real operational evidence:** replace local self-logged deployment and incident history with scoped read-only CI/CD and incident-management integrations.
+5. **Production deployment and controls:** define the threat model; add authentication, authorization, durable audit, backups, recovery testing, resource limits, and platform-native scaling/rollback. Keep fault injection isolated from production.
+
+These are future improvements, not features the current project claims to have completed.
+
+## 7. Deploy the demo stack on an Ubuntu server
 
 These steps deploy the **demo infrastructure**. They do not turn the repository into a production-grade, always-on AIOps platform. Run chaos experiments only on an isolated test server: some experiments stop or stress the application.
 
@@ -135,7 +369,7 @@ Terraform is an **alternative way to create a new AWS server**, not a step to ru
 | Your situation | What to do |
 |---|---|
 | You already created an EC2/Ubuntu server and are following manual Steps 1–7 below | Continue on that server. You do not need Terraform for this deployment. |
-| You want Terraform to create and configure a new AWS server | Use the [Terraform alternative](#9-alternative-deployment-provision-a-new-aws-server-with-terraform) **instead of** manual Steps 1–4. Terraform installs Docker, clones the project, creates the Grafana `.env`, and starts Compose for you. Then use its Systems Manager and dashboard-access steps. |
+| You want Terraform to create and configure a new AWS server | Use the [Terraform alternative](#10-alternative-deployment-provision-a-new-aws-server-with-terraform) **instead of** manual Steps 1–4. Terraform installs Docker, clones the project, creates the Grafana `.env`, and starts Compose for you. Then use its Systems Manager and dashboard-access steps. |
 | You already completed manual Steps 1–7 and now want to use Terraform | Do not apply Terraform to the existing server: this configuration creates a **separate EC2 instance**, which may incur additional charges. Use Terraform only if you intentionally want a second/new server or plan to migrate and later remove the manually provisioned one. |
 
 In short, the Terraform route is **Terraform apply → automatic server setup → Systems Manager access → verify/use the running stack → Terraform destroy when finished**. It replaces the manual server creation/setup steps; it is not required to run the application you have already deployed.
@@ -272,7 +506,7 @@ Choose the path that matches your goal:
 
 - **Keep using the server you already deployed manually:** the main deployment is running. If you want to run the diagnosis agent, continue to **Step 8 (optional)** below. If you only want the service, monitoring, and chaos demo, skip Step 8 and leave the stack running. When you are finished, use **Step 9** to stop the containers.
 - **Run diagnosis evaluation on the existing server:** continue to Step 8. The agent runs separately from Docker Compose and requires Python dependencies, Prometheus, and AWS Bedrock access. Do not run the evaluator with real remediation enabled; follow the safety warning in Step 8.
-- **Have Terraform create infrastructure:** do **not** run Terraform as the next step on the server you just configured. Terraform is a separate deployment path that creates another EC2 instance. Start at [Section 9: Terraform alternative](#9-alternative-deployment-provision-a-new-aws-server-with-terraform) from your workstation only if you intentionally want that new server. Once it is running, use that section's access and verification steps.
+- **Have Terraform create infrastructure:** do **not** run Terraform as the next step on the server you just configured. Terraform is a separate deployment path that creates another EC2 instance. Start at [Section 10: Terraform alternative](#10-alternative-deployment-provision-a-new-aws-server-with-terraform) from your workstation only if you intentionally want that new server. Once it is running, use that section's access and verification steps.
 
 **Quick flow:** manual deployment is **Steps 1–7 → optionally Step 8 → Step 9 when finished**. Terraform is **a separate alternative**, not Step 8 or Step 9 of the manual setup.
 
@@ -293,7 +527,7 @@ The agent imports the application logger, which requires `LOG_FILE`. Set it to t
 export LOG_FILE="$PWD/logs/app.jsonl"
 ```
 
-The Prometheus client in the detector expects Prometheus at `http://localhost:9090`, so run the agent on the Docker host with the stack active. The Bedrock client defaults to the Nova Pro US inference profile in `us-east-1`; override it with `AWS_REGION` and `BEDROCK_MODEL_ID` only when using a matching region and model. On EC2, provide access through an attached instance profile that allows `bedrock:InvokeModel` for the model. For the Terraform deployment, this narrowly scoped permission is provisioned by `terraform/bedrock-policy.json`. For an existing manually created EC2 instance, create and attach an EC2 role with the policy in that file (see [`terraform/README.md`](terraform/README.md)); add it to the existing role if the instance already uses one. Locally, use an AWS CLI profile or another secure AWS credential provider. Never put AWS access keys in source control or a committed `.env` file.
+The Prometheus client in the detector expects Prometheus at `http://localhost:9090`, so run the agent on the Docker host with the stack active. The Bedrock client defaults to the Nova Pro US inference profile in `us-east-1`; override it with `AWS_REGION` and `BEDROCK_MODEL_ID` only when using a matching region and model. On EC2, provide access through an attached instance profile that allows `bedrock:InvokeModel` for the model. The Terraform deployment provisions this narrowly scoped permission using [`terraform/bedrock-policy.json`](terraform/bedrock-policy.json). For an existing manually created EC2 instance, create and attach an EC2 role with that policy; add it to the existing role if the instance already uses one. Locally, use an AWS CLI profile or another secure AWS credential provider. Never put AWS access keys in source control or a committed `.env` file.
 
 Before running the full agent evaluator, read the safety warning below. The detector/root-cause evaluation does not invoke remediation:
 
@@ -385,7 +619,7 @@ docker compose up -d
 
 `docker compose down -v` also removes the named volumes and deletes the stored Prometheus and Grafana data. Use it only when you intentionally want to erase that data.
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 | Symptom | Checks |
 |---|---|
@@ -395,21 +629,22 @@ docker compose up -d
 | Grafana has no charts | Add the Prometheus data source at `http://prometheus:9090`; dashboards are not provisioned by this repository. |
 | Chaos runner cannot reach the app | Run it on the Docker host, from the project root, and verify `http://127.0.0.1:8000/health`. |
 | Diagnosis fails before calling the model | Check that the virtual environment is active, `LOG_FILE` is set, Prometheus is running, and the command is executed from the repository root. |
+| `JSONDecodeError: Extra data` while loading deploy history | Pull the latest code and rerun in dry-run mode. The history reader accepts concatenated valid JSON objects and reports the file and line for malformed JSON; keep new records as one newline-delimited JSON object per line. |
 | Bedrock reports `NoCredentialsError` / “Unable to locate credentials” | Attach an EC2 instance profile with `bedrock:InvokeModel` permission for the configured model, or configure a secure AWS profile for local runs. Verify the active identity with `aws sts get-caller-identity`; never paste access keys into source files. |
 | Bedrock returns an authorization or model error | Check the AWS identity, the model's availability/access in the selected region, the `AWS_REGION` setting, and the resource scope in the attached IAM policy. Never paste credentials into logs or source files. |
 | Remediation command fails | Check that Docker is available to the Python process and that it runs from the Compose project directory. Keep `AIOPS_DRY_RUN=true` while troubleshooting diagnosis. For rollback, confirm that `scripts/deploy-compose.sh` previously saved an image. |
 
-## 8. A good closing answer in an interview
+## 9. A good closing answer in an interview
 
 > “The main lesson from this project was to separate detection, causal ranking, and language-model reasoning instead of asking one model to do everything. The statistics provide measurable signals, the topology and lag analysis narrow likely causes, and the LLM adds an evidence-based explanation. I also learned that evaluation quality and operational safeguards matter as much as a plausible diagnosis. The current prototype demonstrates the workflow, while continuous ingestion, production integrations, security controls, and a larger evaluation set are the next steps.”
 
-## 9. Alternative deployment: provision a new AWS server with Terraform
+## 10. Alternative deployment: provision a new AWS server with Terraform
 
 Terraform provisions a cost-conscious demo host in **US East (N. Virginia), `us-east-1`**, by default. It creates a single EC2 instance for the Docker Compose stack, encrypted storage, and AWS Systems Manager access. The instance security group has no inbound rules: do not expect to connect directly to its public IP or open SSH, Grafana, Prometheus, or Locust to the internet.
 
 This is demo infrastructure, not a highly available or production-hardened deployment. AWS charges apply while resources are running; check current regional pricing before applying.
 
-**Where this fits:** this is a separate alternative to manual Steps 1–4 in Section 6, not a step after manual Step 7. Terraform creates a new host and performs installation and Compose startup automatically. If you already completed Section 6 on an existing host, do not apply this configuration unless you intentionally want an additional EC2 instance.
+**Where this fits:** this is a separate alternative to manual Steps 1–4 in Section 7, not a step after manual Step 7. Terraform creates a new host and performs installation and Compose startup automatically. If you already completed Section 7 on an existing host, do not apply this configuration unless you intentionally want an additional EC2 instance.
 
 ### Prerequisites
 
@@ -501,8 +736,8 @@ terraform destroy
 
 Destroying the instance also deletes its root disk, including its local Prometheus/Grafana data, logs, and generated Grafana password. Back up anything you need before destroying it.
 
-For additional details on cost assumptions, troubleshooting, and the provisioned resources, see [`terraform/README.md`](terraform/README.md).
+The defaults avoid a NAT Gateway, load balancer, managed database, and paid monitoring service. The EC2 host and public IPv4 address are the main ongoing charges; stopping the instance can leave EBS and public IPv4 charges. Check regional pricing before deploying, and destroy the demo when finished. Terraform state is local and must remain private.
 
-## 10. Future roadmap
+## 11. Future roadmap
 
-The planned next steps and their priorities are described in [`ROADMAP.md`](ROADMAP.md). They focus first on safety, reproducible evaluation, and diagnosis reliability before expanding integrations or production deployment.
+The priorities are summarized in [Production-readiness priorities](#production-readiness-priorities). Address safety, reproducible evaluation, and diagnosis reliability before expanding integrations or production deployment.

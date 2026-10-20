@@ -15,11 +15,22 @@ The system is deliberately layered so the hard quantitative work (detection and 
 | Statistical pipeline + LangGraph LLM reasoning | **80%** |
 
 - Evaluated end-to-end on **10 self-injected chaos incidents** across 7 fault types (Redis latency/outage, app outage, downstream latency/failure, CPU spike, memory leak) — full ground truth known at injection time.
-- The LLM layer correctly overrode a statistically-favored but wrong candidate in a recurring case (`downstream_latency_fdc80266`) by weighing correlation strength over a misleading onset signal — see the [case study](METHODOLOGY.md#case-study--correct-override-downstream_latency_fdc80266).
+- The LLM layer correctly overrode a statistically-favored but wrong candidate in a recurring case (`downstream_latency_fdc80266`) by weighing correlation strength over a misleading onset signal — see the [full evaluation discussion](INTERVIEW_AND_DEPLOYMENT_GUIDE.md#latest-diagnosis-evaluation-exact-interpretation).
 - Remediation guardrails are designed to avoid unsafe actions on latency-only evidence and require approval for high-risk actions in the interactive graph. In the evaluation harness, approval interrupts are automatically resumed and the run must remain in dry-run mode; this run did not demonstrate a human approving or executing a live repair.
 - **Known limitations in the latest run**: the genuinely ambiguous `cpu_spike` incident and a `memory_leak` incident were both misdiagnosed. These errors are shown below rather than hidden.
 
-*Sample-size caveat: 10-11 incidents means each one shifts reported accuracy by ~10 points. The comparative direction (naive → statistical → LLM-augmented) is the meaningful signal; treat the absolute percentages as indicative on this dataset, not precise real-world estimates. Full discussion in [METHODOLOGY.md](METHODOLOGY.md).*
+*Sample-size caveat: 10-11 incidents means each one shifts reported accuracy by ~10 points. The comparative direction (naive → statistical → LLM-augmented) is the meaningful signal; treat the absolute percentages as indicative on this dataset, not precise real-world estimates. See the [complete interview and deployment guide](INTERVIEW_AND_DEPLOYMENT_GUIDE.md) for methodology and caveats.*
+
+## Resume-ready impact
+
+Use or adapt these bullets for a resume. The accuracy figures come from the project's latest **10-incident, self-injected evaluation**, not a production deployment:
+
+- Improved root-cause diagnosis accuracy from **27% (earliest-signal baseline) to 70% (statistical ranking) to 80% (statistical ranking + LangGraph/LLM)**—a **53 percentage-point** gain over the baseline and **10 points** over statistics alone, measured across **10 labeled incidents and 7 fault types**.
+- Built a telemetry-to-diagnosis pipeline covering **9 service signals**, with **5-second Prometheus scrapes**, MAD/CUSUM anomaly detection, dependency-aware lag-correlation ranking, and evidence-grounded LangGraph reasoning using metrics, logs, and deployment/incident history.
+- Demonstrated a single-host Compose deployment workflow on EC2: deployed an app image, scaled from **2 to 3 healthy replicas**, and rolled back to the saved image while retaining **3 healthy replicas**. This was an operator-run demo, not AWS Auto Scaling or an agent-triggered repair.
+- Added bounded remediation controls with dry-run defaults and approval gates for high-risk actions; the evaluation run remained in dry-run, so its proposed app restart did **not** execute.
+
+**How to frame the results:** describe the 80% as accuracy on a small controlled dataset. Do not claim production incident reduction, time saved, or autonomous repair; those were not measured by this project.
 
 ### What the latest evaluation output means
 
@@ -86,7 +97,7 @@ The scale helper adds one app replica, increasing the service from two to three.
 
 The rollback helper restores the saved pre-deployment app image without reducing the replica count. All three replicas report healthy after rollback. The Prometheus, Grafana, Locust, Redis, and Nginx containers remain part of the same Compose demo stack.
 
-The pasted command `curl -fsS http://http://34.235.132.35:8000/health` has a duplicated `http://`, so it is malformed and does not validate the public endpoint. A subsequent request to `http://127.0.0.1:8000/health` on the EC2 host returned `{"status":"healthy"}`, confirming the local health route after rollback. The Terraform deployment intentionally has no public inbound rules; use SSM port forwarding rather than exposing the app, Grafana, Prometheus, Locust, or unauthenticated chaos endpoints to the internet. See the [Terraform connection instructions](terraform/README.md).
+The pasted command `curl -fsS http://http://34.235.132.35:8000/health` has a duplicated `http://`, so it is malformed and does not validate the public endpoint. A subsequent request to `http://127.0.0.1:8000/health` on the EC2 host returned `{"status":"healthy"}`, confirming the local health route after rollback. The Terraform deployment intentionally has no public inbound rules; use SSM port forwarding rather than exposing the app, Grafana, Prometheus, Locust, or unauthenticated chaos endpoints to the internet. See the [Terraform deployment steps](INTERVIEW_AND_DEPLOYMENT_GUIDE.md#10-alternative-deployment-provision-a-new-aws-server-with-terraform).
 
 ### How to read the latest `/metrics` output
 
@@ -169,12 +180,12 @@ Saved incident telemetry ──> detector ──> root-cause ranking
 
 The service and monitoring stack can run continuously, but the diagnosis evaluator is a separate command that replays saved incident telemetry. A Locust or Grafana chart changing does **not** automatically start a diagnosis or remediation. The agent may query Prometheus for evidence when a diagnosis run is explicitly started.
 
-> **Security:** Prometheus, Locust, Grafana, and the chaos-control endpoints are demo tools and should not be left publicly reachable without appropriate protection. Prefer the private SSM port-forwarding workflow in the [Terraform guide](terraform/README.md); do not expose unauthenticated monitoring or fault-injection interfaces to the internet.
+> **Security:** Prometheus, Locust, Grafana, and the chaos-control endpoints are demo tools and should not be left publicly reachable without appropriate protection. Prefer the private SSM port-forwarding workflow in the [Terraform deployment steps](INTERVIEW_AND_DEPLOYMENT_GUIDE.md#10-alternative-deployment-provision-a-new-aws-server-with-terraform); do not expose unauthenticated monitoring or fault-injection interfaces to the internet.
 
 
 ## Architecture
 
-The diagram separates the **running demo stack** from the **explicitly started diagnosis/evaluation workflow**. This distinction matters: changing a Grafana chart does not automatically start the agent. For the full interviewer-ready explanation, see **[INTERVIEW_PROJECT_WALKTHROUGH.md](INTERVIEW_PROJECT_WALKTHROUGH.md)**; for code-mapped details, see **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+The diagram separates the **running demo stack** from the **explicitly started diagnosis/evaluation workflow**. This distinction matters: changing a Grafana chart does not automatically start the agent. The [complete interview and deployment guide](INTERVIEW_AND_DEPLOYMENT_GUIDE.md) contains the architecture explanation, methodology, code map, evaluation discussion, and deployment steps.
 
 ```mermaid
 flowchart TB
@@ -255,17 +266,7 @@ flowchart TB
 
 The Compose `scale_out` action is a bounded **single-host demo operation** (up to three replicas), not AWS Auto Scaling or production autoscaling.
 
-For the detailed methodology behind each phase — detection formulas, correlation math, evidence-gathering design, and the full case studies — see **[METHODOLOGY.md](METHODOLOGY.md)**.
-
-For a plain-English interview walkthrough, project Q&A, and step-by-step Ubuntu server deployment instructions, see **[INTERVIEW_AND_DEPLOYMENT_GUIDE.md](INTERVIEW_AND_DEPLOYMENT_GUIDE.md)**.
-
-For a first-person, start-to-finish presentation script you can use in an interview, see **[INTERVIEW_PROJECT_WALKTHROUGH.md](INTERVIEW_PROJECT_WALKTHROUGH.md)**.
-
-For a detailed code walkthrough, an explanation of the live monitoring screenshots, and the diagnosis evaluator output, see **[EXPLAINED_README.md](EXPLAINED_README.md)**.
-
-For a cost-conscious AWS deployment using Terraform and a single EC2 instance, see **[terraform/README.md](terraform/README.md)**.
-
-See **[ROADMAP.md](ROADMAP.md)** for the proposed next steps and longer-term direction.
+For the complete project explanation, first-person interview script, architecture and methodology, latest evaluation interpretation, deployment screenshots, Ubuntu steps, Terraform/SSM deployment, troubleshooting, and future-work priorities, see **[INTERVIEW_AND_DEPLOYMENT_GUIDE.md](INTERVIEW_AND_DEPLOYMENT_GUIDE.md)**.
 
 ## Components
 
@@ -313,6 +314,6 @@ AIOPS_DRY_RUN=true python3 -m agent.evaluate_diagnosis
 
 ## Known Limitations
 
-- Root-cause ranking for faults producing closely-matched candidate signatures (see the `cpu_spike` case study in [METHODOLOGY.md](METHODOLOGY.md)) remains unresolved by both the statistical and LLM layers.
+- Root-cause ranking for faults producing closely-matched candidate signatures (see the [latest evaluation discussion](INTERVIEW_AND_DEPLOYMENT_GUIDE.md#latest-diagnosis-evaluation-exact-interpretation)) remains unresolved by both the statistical and LLM layers.
 - Deploy-history and incident-history evidence nodes are validated against synthetic/self-logged data; a production deployment would integrate real CI/CD and incident-management systems.
 - Ground-truth accuracy figures are measured against 10-11 self-injected incidents; a larger labeled set would tighten confidence in these numbers.
