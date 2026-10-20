@@ -96,7 +96,7 @@ graph TD;
 
 A structural confound was found and mitigated during evaluation: process memory's resident-set size ramps up rapidly during process startup, independent of any real fault, which caused a naive onset-timing signal to systematically (and wrongly) flag memory as the earliest, and therefore most causal, deviation in almost every incident. The prompt explicitly discounts onset timing for this metric in favor of its correlation and behavior classification.
 
-**Remediation:** the LLM selects from a fixed action set (`restart_service`, `scale_out`, `flush_cache`, `rollback_deploy`, `none`), with explicit prompt-level guardrails — for example, Redis or downstream latency alone must never justify a restart; a restart requires availability failure, crash evidence, or explicit unhealthy-service signals. Low-risk actions execute automatically in a dry run; high-risk actions require human approval via a LangGraph interrupt before execution.
+**Remediation:** the LLM selects from a fixed action set (`restart_service`, `scale_out`, `flush_cache`, `rollback_deploy`, `none`), with explicit prompt-level guardrails — for example, Redis or downstream latency alone must never justify a restart; a restart requires availability failure, crash evidence, or explicit unhealthy-service signals. Remediation defaults to dry-run through `AIOPS_DRY_RUN=true`; high-risk actions require human approval via a LangGraph interrupt before execution. In the Compose demo, scale-out adds one app replica up to three total, and rollback restores the image retained by `scripts/deploy-compose.sh`; these are bounded single-host examples rather than production integrations.
 
 | Layer | Accuracy* |
 |---|---|

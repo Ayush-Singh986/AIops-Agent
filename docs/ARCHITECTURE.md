@@ -11,14 +11,15 @@ flowchart TB
     subgraph LAB["1 · Demo system and fault injection"]
         direction LR
         USER["Traffic generator / API caller<br/>chaos/locustfile.py"]
+        PROXY["Nginx proxy<br/>app-proxy:8000"]
         CLI["Experiment CLI<br/>chaos/run_experiments.py"]
         INJECT["Chaos scripts<br/>chaos/scripts/*.py"]
         CHAOS_API["Fault-control endpoints<br/>service/chaos_routes.py"]
         CHAOS_STATE["In-memory fault state<br/>service/chaos_state.py"]
-        API["FastAPI service<br/>service/main.py · service/routes.py"]
+        API["FastAPI app replicas (1–3)<br/>service/main.py · service/routes.py"]
         REDIS[("Redis")]
         DOWNSTREAM["Simulated catalog dependency"]
-        USER --> API
+        USER --> PROXY --> API
         CLI --> INJECT
         INJECT -->|"HTTP controls / container actions"| CHAOS_API
         CHAOS_API --> CHAOS_STATE
@@ -154,7 +155,9 @@ The service's telemetry and Prometheus are live inputs for evidence collection, 
 
 ## Remediation boundary
 
-The action names in the diagnosis prompt are not all implemented. The executor currently runs `restart_service` and Redis `FLUSHALL`; `scale_out` and `rollback_deploy` are not implemented. The executor starts with `DRY_RUN = False`, and the diagnosis evaluator currently auto-approves approval interrupts. Treat the evaluation workflow as an isolated demo and enable dry-run before running it unless real remediation is explicitly intended.
+The Compose demo implements `scale_out` by adding one `aiops-app` replica behind the Nginx proxy, with a maximum of three replicas. `rollback_deploy` restores the prior image tagged by `scripts/deploy-compose.sh` and requires recent deployment evidence. Both actions are high-risk and require approval in the interactive graph. Remediation defaults to dry-run through `AIOPS_DRY_RUN=true`; the diagnosis evaluator still auto-approves approval interrupts, so never run that evaluator with live remediation enabled. The app image deploy, scale, and rollback scripts are documented in the end-to-end [deployment guide](../INTERVIEW_AND_DEPLOYMENT_GUIDE.md).
+
+These actions are single-host Compose demonstrations, not production autoscaling or a production rollback controller. The deployment history is a local JSONL file, and helper scripts invoked directly do not add a separate confirmation prompt.
 
 The chaos endpoints are also unauthenticated. Keep them isolated; do not expose them or the demo dashboards directly to the public internet.
 

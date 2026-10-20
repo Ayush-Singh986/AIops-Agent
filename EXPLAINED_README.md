@@ -376,7 +376,7 @@ The remediation system is implemented in `agent/remediation.py`.
 
 - high-risk actions require approval
 - low-risk actions may execute directly
-- some actions are intentionally not implemented
+- diagnosis runs default to dry-run unless `AIOPS_DRY_RUN=false` is explicitly set
 - actions are rejected if they do not fit the diagnosis
 - the code explicitly blocks unsafe recommendations such as using cache flush on Redis latency alone without evidence of cache corruption
 
@@ -384,9 +384,11 @@ The remediation system is implemented in `agent/remediation.py`.
 
 - Redis latency alone does not justify a restart
 - application outage may justify a restart
-- CPU saturation may justify scaling out
-- a recent deploy may justify a rollback if strongly linked
+- sustained CPU pressure or high app latency may justify adding one Compose replica, up to three total; an Nginx proxy routes requests across replicas
+- a recent deploy may justify a rollback if strongly linked; `scripts/deploy-compose.sh` preserves the previous app image and records deployment timestamps
 - no remediation is recommended when the issue is ambiguous or not actionable
+
+`scale_out` and `rollback_deploy` are implemented for this single-host Compose demo, not as production platform integrations. Both are high-risk actions and require approval in the interactive diagnosis graph. `scale_out` is rejected for unrelated root causes, and `rollback_deploy` is rejected unless recent deployment evidence exists. The direct helper scripts in the deployment guide are operator-invoked actions and do not ask for a second confirmation.
 
 This is critical because the project is trying to demonstrate controlled, safe automation rather than reckless self-healing.
 
@@ -545,7 +547,7 @@ The evaluator does not let the LLM examine every raw time series and independent
 
 #### Important: the evaluator actually restarted the app
 
-This run is not a harmless diagnosis-only report. `agent/evaluate_diagnosis.py` invokes the graph with `auto_approve=True`, and `DRY_RUN` is currently `False` in `agent/remediation.py`. The output confirms that the app-outage case executed `docker compose restart aiops-app` (shown by `[+] Restarting 1/1`). Run this evaluator only against an isolated demo environment. Before any run where remediation must not execute, set `DRY_RUN = True` in `agent/remediation.py`; do not rely on the approval interrupt to protect this evaluator, because it auto-approves it.
+The screenshot is from an earlier run in which `agent.evaluate_diagnosis.py` auto-approved the graph interrupt and the app-outage case executed `docker compose restart aiops-app` (shown by `[+] Restarting 1/1`). The current code defaults to dry-run via `AIOPS_DRY_RUN=true`, but the evaluator still auto-approves interrupts. Keep the default for evaluation; do not run the evaluator with `AIOPS_DRY_RUN=false`.
 
 The earlier `NoCredentialsError` was an AWS configuration issue, not an anomaly-detector failure. The current run's successful `nova_pro latency` lines show Bedrock was reachable and authenticated for this run; they do not prove that credentials are configured safely or that future runs will use the same AWS role. For the Terraform-created instance, the Bedrock permission is defined in `terraform/bedrock-policy.json`. An existing manually created EC2 instance needs an appropriate IAM role attached separately.
 
@@ -559,7 +561,8 @@ This project is deliberately a lab and demo system, not a production-ready SaaS 
 - the app is intentionally simple and controlled
 - the LLM is guarded but still relies on the quality of the metric pipeline
 - some faults remain ambiguous and are not fully resolved in all cases
-- actions like `scale_out` and `rollback_deploy` are not fully implemented in the same way as restart or flush
+- `scale_out` and `rollback_deploy` are implemented only for the single-host Compose demo: scaling is capped at three replicas and rollback depends on the deployment helper's locally saved prior image
+- deployment and rollback records are local JSONL files, not a durable CI/CD audit trail
 
 This honesty is part of the architecture — the project is designed to demonstrate reasoning under constraints, not to be a fully autonomous production system.
 

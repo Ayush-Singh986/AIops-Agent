@@ -43,8 +43,10 @@ The key design choice is to keep the quantitative diagnosis outside the LLM. Sta
 5. **The root-cause stage ranks candidates.** A hand-maintained dependency map encodes plausible cause-and-effect relationships. The ranking combines the dependency prior, lagged correlation, and onset timing. A detected app-availability outage is treated as a hard outage signal.
 6. **The diagnosis workflow gathers context.** LangGraph nodes collect metric summaries, application-log samples, nearby deployment records, and similar recorded incidents. If the first diagnosis is uncertain, the workflow investigates related metrics and tries again, with an iteration limit.
 7. **The LLM explains or challenges the ranking.** Amazon Bedrock Nova Pro is the configured provider. The prompt asks it to use the provided evidence, explain its choice, and select from a fixed set of remediation actions. Its confidence is bounded by the statistical candidate confidence.
-8. **The workflow applies a safety route.** The workflow can finish without action, execute a low-risk action, or pause at an approval interrupt for an action classified as high risk.
+8. **The workflow applies a safety route.** The workflow can finish without action, execute a low-risk action, or pause at an approval interrupt for an action classified as high risk. Scale-out and deployment rollback require approval.
 9. **The result can be checked.** The diagnosis report includes the selected root cause, confidence, hypothesis, action, approval status, and remediation result.
+
+For this Compose demo, an Nginx proxy routes requests to the app so Compose can add replicas without binding every replica to the same host port. Prometheus discovers and scrapes each replica through Docker DNS. The approved `scale_out` action adds one replica, up to three total. The approved `rollback_deploy` action restores the prior image saved by `scripts/deploy-compose.sh`; it is available only after that deployment helper has been used.
 
 ### What runs automatically, and what does not
 
@@ -111,7 +113,7 @@ The key design choice is to keep the quantitative diagnosis outside the LLM. Sta
 **A:** The evaluation set is small and self-injected; the current baseline is not seasonality-aware; the dependency map is hand-maintained; deployment and incident history are local demo logs; and there is no always-on detector/agent service. The project also has a known ambiguous CPU-spike case documented in the methodology.
 
 **Q: Is it ready to remediate a production system autonomously?**  
-**A:** No. It is a prototype. The code’s action vocabulary includes scale-out and rollback, but the current execution function only implements service restart and Redis `FLUSHALL`; the other action names are not implemented there. Also, the evaluator auto-approves interrupts and remediation is not in dry-run mode by default. I would keep it isolated, run evaluation in dry-run mode, and add policy enforcement, authentication, audit trails, blast-radius limits, and tested integrations before considering production use.
+**A:** No. It is a prototype. In the Compose demo, scale-out is limited to three app replicas on one host, and rollback restores a prior image recorded by the deployment helper. Both are high-risk actions that pause for approval in an interactive graph run. The evaluator auto-approves interrupts, so remediation defaults to dry-run and I never run the evaluator with live remediation enabled. Production use would require platform-native scaling, authenticated policy enforcement, durable audit trails, tested deployment integrations, and broader recovery checks.
 
 **Q: How would you improve it for a real environment?**  
 **A:** First, make detection seasonal-aware and continuously consume production telemetry. Then derive dependency topology from service catalog or tracing data, integrate real deployment and incident systems, and build a larger labeled evaluation set from reviewed postmortems. I would also add authentication and authorization, structured audit logs, per-action policies, idempotency, rollback plans, and human approval for high-impact changes.
@@ -301,19 +303,71 @@ python -m detector.evaluate_rootcause
 
 ### Critical remediation safety warning
 
-The current defaults are not safe for an unattended production run:
+The current defaults favor safety, but this is still not a production workflow:
 
-- `DRY_RUN` is `False` in `agent/remediation.py`.
+- `AIOPS_DRY_RUN` defaults to `true`; remediation commands return a `dry_run` result without running Docker.
 - `agent/evaluate_diagnosis.py` passes `auto_approve=True`, so it automatically approves any approval interrupt during evaluation.
-- The executor currently implements `restart_service` and Redis `FLUSHALL`; `scale_out` and `rollback_deploy` are named actions but are not implemented by the executor.
+- `scale_out`, `rollback_deploy`, and `restart_service` are high-risk and require approval in the interactive graph. Scale-out is capped at three single-host replicas and only allowed for CPU/latency root causes; rollback requires a previous image, recent deployment evidence, and an app availability/error/latency root cause.
 
-To run the full diagnosis evaluation without executing a supported remediation, change `DRY_RUN = True` in `agent/remediation.py` before running:
+Run the diagnosis evaluator in dry-run mode:
 
 ```bash
-python -m agent.evaluate_diagnosis
+AIOPS_DRY_RUN=true python -m agent.evaluate_diagnosis
 ```
 
-Restore the original setting only when you deliberately intend to test the implemented action in an isolated environment and have reviewed the approval behavior. Do not treat the evaluator's automatic approval as a production approval workflow.
+The evaluator automatically approves interrupts, so do not run it with `AIOPS_DRY_RUN=false`. To test a live action, use only an isolated demo host and either invoke the helper steps below deliberately or use an interactive graph run and review its approval prompt. Do not treat the evaluator's automatic approval as a production approval workflow.
+
+### Step 8A: Deploy, scale, and roll back the Compose demo
+
+This hands-on sequence demonstrates the two newly implemented actions without asking the LLM to trigger them. Run it from the project root on the isolated Compose host, after completing Steps 1–7.
+
+1. Confirm the baseline is healthy and the environment file is private:
+
+   ```bash
+   docker compose ps
+   curl -fsS http://127.0.0.1:8000/health
+   test -f .env && test ! -L .env
+   ```
+
+2. To demonstrate deployment and prepare a rollback image, pull the desired code and run the deployment helper. This helper preserves the currently running image, builds a new tagged image, deploys it without changing the current replica count, waits for health checks, and logs the deployment to `logs/deploys.jsonl`:
+
+   ```bash
+   git pull --ff-only origin main
+   bash scripts/deploy-compose.sh
+   docker compose ps
+   tail -n 5 logs/deploys.jsonl
+   ```
+
+   The first deployment of a fresh installation establishes a running image; running this helper for a subsequent update preserves the current image as the rollback target.
+
+3. To demonstrate `scale_out`, add one app replica. The proxy stays on host port `8000` and distributes requests. The demo limits the total to three replicas:
+
+   ```bash
+   bash scripts/scale-out-compose.sh
+   docker compose ps
+   curl -fsS http://127.0.0.1:8000/health
+   ```
+
+   Repeat only until three app replicas are running; the script rejects further scale-out. Run Locust through its private web UI if you want to observe traffic through the proxy.
+
+4. To demonstrate `rollback_deploy`, restore the image recorded before the last helper-driven deployment:
+
+   ```bash
+   bash scripts/rollback-compose.sh
+   docker compose ps
+   curl -fsS http://127.0.0.1:8000/health
+   tail -n 5 logs/deploys.jsonl
+   ```
+
+   The script requires a saved rollback image and at least one running app container, then waits for the restored containers to pass their health checks. If the rollback target is absent, it exits with an explicit error instead of pretending the rollback succeeded.
+
+5. Check the result before continuing or stopping the stack:
+
+   ```bash
+   docker compose logs --tail=100 aiops-app app-proxy
+   ```
+
+The scripts operate directly on Docker Compose and do not contain a separate approval prompt: invoking them manually is the operator's explicit action. The agent's high-risk actions instead use the LangGraph approval interrupt. Both paths are for an isolated demo only, not production traffic.
 
 ### Step 9: Stop services and preserve data
 
@@ -343,7 +397,7 @@ docker compose up -d
 | Diagnosis fails before calling the model | Check that the virtual environment is active, `LOG_FILE` is set, Prometheus is running, and the command is executed from the repository root. |
 | Bedrock reports `NoCredentialsError` / “Unable to locate credentials” | Attach an EC2 instance profile with `bedrock:InvokeModel` permission for the configured model, or configure a secure AWS profile for local runs. Verify the active identity with `aws sts get-caller-identity`; never paste access keys into source files. |
 | Bedrock returns an authorization or model error | Check the AWS identity, the model's availability/access in the selected region, the `AWS_REGION` setting, and the resource scope in the attached IAM policy. Never paste credentials into logs or source files. |
-| Remediation command fails | Check that Docker is available to the Python process and that it runs from the Compose project directory. Keep `DRY_RUN=True` while troubleshooting diagnosis. |
+| Remediation command fails | Check that Docker is available to the Python process and that it runs from the Compose project directory. Keep `AIOPS_DRY_RUN=true` while troubleshooting diagnosis. For rollback, confirm that `scripts/deploy-compose.sh` previously saved an image. |
 
 ## 8. A good closing answer in an interview
 

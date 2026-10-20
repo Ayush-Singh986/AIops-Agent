@@ -54,6 +54,7 @@ restart_service
 scale_out
 - Sustained CPU saturation
 - High request rate causing overload
+- In this Docker Compose demo, adds one app replica behind the local proxy (maximum 3 total)
 
 flush_cache
 - Stale or corrupted cache only
@@ -61,11 +62,13 @@ flush_cache
 
 rollback_deploy
 - Recent deployment strongly linked to incident
+- Only for app availability, app error-rate, or app latency incidents when deploy history confirms a nearby deployment; restores the image recorded by the deploy script
 
 none
 - No safe automated remediation exists
 - Root cause is external
 - More investigation required
+- Do not scale out unless the root cause is sustained CPU pressure or high app latency
 
 Before recommending remediation:
 - Check whether the action logically addresses the root cause metric.

@@ -3,10 +3,11 @@ services:
     image: redis:7-alpine
 
   aiops-app:
+    image: aiops-agent-app:${APP_IMAGE_TAG:-latest}
     build:
       context: ./service
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     environment:
       - REDIS_URL=redis://redis:6379/0
       - LOG_FILE=/app/logs/app.jsonl
@@ -14,6 +15,30 @@ services:
       - redis
     volumes:
       - ./logs:/app/logs
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health', timeout=2)"
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  app-proxy:
+    image: nginx:1.28-alpine
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./nginx/aiops-app.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      aiops-app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8000/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
       
   prometheus:
     image: prom/prometheus:latest
@@ -42,11 +67,11 @@ services:
     ports:
       - "8089:8089"
     command: >
-      -f /mnt/chaos/locustfile.py --host http://aiops-app:8000
+      -f /mnt/chaos/locustfile.py --host http://app-proxy:8000
     volumes:
       - ./chaos:/mnt/chaos
     depends_on:
-      - aiops-app
+      - app-proxy
 
 volumes:
   # persist storage on disk

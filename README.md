@@ -33,6 +33,54 @@ The system is deliberately layered so the hard quantitative work (detection and 
 
 https://github.com/user-attachments/assets/4cfea308-10b8-42ea-9e40-c5ee535436eb
 
+### Screenshots from the running demo
+
+These screenshots are included here in the main README so you can understand what the live monitoring screens show without opening another document. The three screenshots supplied for this walkthrough are cropped to hide the public IP and AWS account header.
+
+#### Prometheus confirms the app metrics target is reachable
+
+![Prometheus target health showing aiops-app up](docs/live-prometheus-target-health.png)
+
+Prometheus reports the `aiops-app` target as **1 / 1 up**. It scraped the app's `/metrics/` endpoint in about **4 ms**, on the configured **5-second** scrape interval. This confirms that Prometheus can collect metrics from the app; it does not by itself prove every API request is healthy or that an incident has been diagnosed.
+
+#### Locust generates requests and shows request rate
+
+![Locust running a one-user test with request-rate chart](docs/live-locust-running.png)
+
+Locust is the load generator, not the diagnosis agent. This snapshot shows a running test with **one virtual user**, about **0.8 requests per second**, and **0% failures**. A virtual user is a simulated client, not a real person.
+
+#### Locust charts show response times and active users
+
+![Locust response-time percentiles and active-user chart](docs/live-locust-metrics.png)
+
+The upper chart shows the 50th- and 95th-percentile response times. Most observations are low, with brief spikes close to **500 ms**. The lower chart shows the virtual-user count briefly falling to zero before returning to one. These graphs record what happened during this test; they do not identify the cause of a spike or pause. Check the app logs, Prometheus metrics, and chaos-experiment timestamps before attributing it to a fault.
+
+#### Grafana visualizes service telemetry during experiments
+
+![Grafana dashboard with request, latency, cache, CPU, and memory metrics](docs/grafana-fault-injection-1.png)
+
+This dashboard groups availability, dependency latency/errors, CPU, and memory signals. These are useful operational clues to investigate together; a chart changing is not, by itself, proof of root cause.
+
+![Grafana dashboard with request rate, HTTP responses, cache, and latency](docs/grafana-fault-injection-2.png)
+
+This dashboard shows request throughput, HTTP response counts, average and p95 request latency, Redis latency, and cache hits/misses/errors. During a controlled experiment, compare the timing of these signals with the injected fault and logs.
+
+#### How the monitoring screenshots connect to diagnosis
+
+```text
+Locust traffic ──> Nginx proxy ──> FastAPI app ──> Redis / simulated dependency
+                                      │
+                                      └── /metrics ──> Prometheus ──> Grafana
+
+Saved incident telemetry ──> detector ──> root-cause ranking
+                                             └──> LangGraph / Bedrock
+                                                   └──> remediation decision
+```
+
+The service and monitoring stack can run continuously, but the diagnosis evaluator is a separate command that replays saved incident telemetry. A Locust or Grafana chart changing does **not** automatically start a diagnosis or remediation. The agent may query Prometheus for evidence when a diagnosis run is explicitly started.
+
+> **Security:** Prometheus, Locust, Grafana, and the chaos-control endpoints are demo tools and should not be left publicly reachable without appropriate protection. Prefer the private SSM port-forwarding workflow in the [Terraform guide](terraform/README.md); do not expose unauthenticated monitoring or fault-injection interfaces to the internet.
+
 
 ## Architecture
 
@@ -40,7 +88,7 @@ The diagram below shows the project at a glance. For the detailed code-mapped wo
 
 ```mermaid
 flowchart TD
-    A["Docker Compose\nFastAPI app + Redis + Prometheus"] --> B["Chaos Injection Harness\nredis_latency · redis_outage · app_outage\ndownstream_latency · downstream_failure\ncpu_spike · memory_leak"]
+    A["Docker Compose\nNginx proxy + FastAPI app (1–3 replicas)\nRedis + Prometheus"] --> B["Chaos Injection Harness\nredis_latency · redis_outage · app_outage\ndownstream_latency · downstream_failure\ncpu_spike · memory_leak"]
     B --> C["Phase 2 — Anomaly Detection\nMAD z-score per metric · CUSUM for slow-drift metrics\n(memory) · persistence filter (3 samples)"]
     C --> D["Phase 3 — Root-Cause Correlation\nDependency-topology prior · lag cross-correlation\nOnset-timing tiebreaker → ranked candidate list"]
     D --> E["Phase 4 — LangGraph Diagnosis Agent"]
@@ -77,6 +125,8 @@ See **[ROADMAP.md](ROADMAP.md)** for the proposed next steps and longer-term dir
 - **Detectors** (`detector/mad_detector.py`, `detector/forecast_detector.py`) — per-metric anomaly detection with a CUSUM path for slow-drift metrics.
 - **Root-cause pipeline** (`detector/rootcause/`) — event extraction, dependency-topology prior, lag correlation, ranking.
 - **Diagnosis agent** (`agent/`) — LangGraph state machine: evidence-gathering nodes, escalation logic, LLM diagnosis node, remediation finalization and execution, human-approval interrupt.
+- **Compose remediation** — high-risk `scale_out` adds a replica (up to three) behind an Nginx proxy; `rollback_deploy` restores the image preserved by the deployment script. Both require approval in the graph.
+- **Deployment helpers** (`scripts/`) — health-checked image deployment with rollback preservation, bounded scale-out, and rollback history.
 - **Evaluation harnesses** — `detector/evaluate.py` (detection), `detector/evaluate_rootcause.py` (correlation), `agent/evaluate_diagnosis.py` (full agent, end to end).
 - **Infrastructure as code** (`terraform/`) — provisions a small EC2 host, private-by-default security group, encrypted storage, and SSM access for the Docker Compose demo.
 
@@ -101,9 +151,17 @@ python3 -m detector.evaluate
 python3 -m detector.evaluate_rootcause
 ```
 
-The full diagnosis evaluator requires the agent's Python dependencies, AWS Bedrock access, and a running local Prometheus instance. Before running `python3 -m agent.evaluate_diagnosis`, set `DRY_RUN = True` in `agent/remediation.py`: the evaluator currently auto-approves approval interrupts, and remediation is not in dry-run mode by default.
+The full diagnosis evaluator requires the agent's Python dependencies, AWS Bedrock access, and a running local Prometheus instance. The evaluator auto-approves approval interrupts, so always run it with dry-run enabled.
 
-> **Safety note:** The remediation executor currently implements `restart_service` and Redis `FLUSHALL`; `scale_out` and `rollback_deploy` are not implemented. Do not run the agent evaluator against production infrastructure.
+The diagnosis executor defaults to dry-run. Run the evaluator safely with:
+
+```bash
+AIOPS_DRY_RUN=true python3 -m agent.evaluate_diagnosis
+```
+
+`agent.evaluate_diagnosis` automatically approves approval interrupts, so never set `AIOPS_DRY_RUN=false` for that evaluator. The Compose demo implements `scale_out` (one additional replica per action, maximum three) and `rollback_deploy` (restores the previous image recorded by `scripts/deploy-compose.sh`); both are high-risk and require approval in the interactive graph. See the full run-through in [INTERVIEW_AND_DEPLOYMENT_GUIDE.md](INTERVIEW_AND_DEPLOYMENT_GUIDE.md).
+
+> **Safety note:** This is a single-host learning demo, not production autoscaling or a production rollback controller. The direct helper scripts change running containers; use them only on an isolated demo host.
 
 ## Known Limitations
 

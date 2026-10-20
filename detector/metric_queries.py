@@ -20,12 +20,12 @@ QUERIES = {
     # 7. Rate of catalog-service errors per second
     "downstream_error_rate": 'sum(rate(downstream_calls_total{outcome="error"}[1m])) or vector(0)',
     
-    # 8. CPU rate of the FastAPI process (measured in cores consumed)
-    "process_cpu_rate": "rate(process_cpu_seconds_total[1m]) or vector(0)",
+    # 8. Highest per-replica CPU rate (measured in cores consumed)
+    "process_cpu_rate": "max(rate(process_cpu_seconds_total[1m])) or vector(0)",
     
-    # 9. Resident memory size of the FastAPI process in bytes
-    "process_resident_memory_bytes": "process_resident_memory_bytes or vector(0)",
+    # 9. Highest per-replica resident memory in bytes
+    "process_resident_memory_bytes": "max(process_resident_memory_bytes) or vector(0)",
     
-    # 10. Availability state of the app container (1 = up, 0 = offline)
-    "app_availability": 'sum(up{job="aiops-app"}) or vector(0)'
+    # 10. Availability state of all discovered app replicas (1 = all up, 0 = not all up)
+    "app_availability": 'min(up{job="aiops-app"}) or vector(0)'
 }
