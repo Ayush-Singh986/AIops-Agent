@@ -34,10 +34,10 @@ terraform plan
 terraform apply
 ```
 
-The default region is `ap-south-1`. Override settings using command-line variables, for example:
+The default region is `us-east-1` (US East / N. Virginia). Override settings using command-line variables when needed, for example:
 
 ```bash
-terraform apply -var="aws_region=us-east-1" -var="instance_type=t3a.medium"
+terraform apply -var="aws_region=us-west-2" -var="instance_type=t3a.medium"
 ```
 
 Terraform uses local state by default. Keep `terraform.tfstate` private and backed up; it is ignored by Git. For a shared or production environment, configure a protected remote state backend with locking before applying.
