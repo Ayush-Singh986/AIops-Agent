@@ -326,9 +326,103 @@ docker compose up -d
 
 > “The main lesson from this project was to separate detection, causal ranking, and language-model reasoning instead of asking one model to do everything. The statistics provide measurable signals, the topology and lag analysis narrow likely causes, and the LLM adds an evidence-based explanation. I also learned that evaluation quality and operational safeguards matter as much as a plausible diagnosis. The current prototype demonstrates the workflow, while continuous ingestion, production integrations, security controls, and a larger evaluation set are the next steps.”
 
-## 9. Terraform deployment on AWS
+## 9. Provision the AWS demo infrastructure with Terraform
 
-To provision a small, cost-conscious AWS host for the Docker Compose demo, follow the Terraform guide in [`terraform/README.md`](terraform/README.md). It creates a single EC2 instance with encrypted storage and Session Manager access; it does not open application, Grafana, Prometheus, Locust, or SSH ports to the internet.
+Terraform provisions a cost-conscious demo host in **US East (N. Virginia), `us-east-1`**, by default. It creates a single EC2 instance for the Docker Compose stack, encrypted storage, and AWS Systems Manager access. The instance security group has no inbound rules: do not expect to connect directly to its public IP or open SSH, Grafana, Prometheus, or Locust to the internet.
+
+This is demo infrastructure, not a highly available or production-hardened deployment. AWS charges apply while resources are running; check current regional pricing before applying.
+
+### Prerequisites
+
+- An AWS account and CLI identity allowed to create EC2, VPC, IAM, and Systems Manager resources.
+- Terraform 1.5 or newer installed on your workstation.
+- AWS CLI and the AWS Session Manager plugin installed and configured on your workstation.
+- An internet connection on the EC2 instance so it can install Docker and pull the public GitHub repository and images.
+
+### Step 1: Review and deploy
+
+From the project root, enter the Terraform directory, initialize the AWS provider, and check the planned resources:
+
+```bash
+cd terraform
+terraform init
+terraform fmt -check
+terraform validate
+terraform plan
+```
+
+When the plan is as expected, create the infrastructure:
+
+```bash
+terraform apply
+```
+
+Review the plan and type `yes` at the confirmation prompt. The default is `t3a.small` with a 20 GB encrypted gp3 disk; a larger `t3a.medium` instance can be selected if the demo stack runs out of memory:
+
+```bash
+terraform apply -var="instance_type=t3a.medium"
+```
+
+The first boot installs Docker Compose, clones the `main` branch of this repository, generates a random Grafana password in `/opt/aiops-agent/.env` with restrictive permissions, and starts the containers. Allow a few minutes for first boot and Systems Manager registration.
+
+Terraform keeps local state under `terraform/terraform.tfstate`. Do not commit or share this file; the repository ignores it.
+
+### Step 2: Connect through Systems Manager
+
+Print the shell command Terraform generated:
+
+```bash
+terraform output -raw ssm_shell_command
+```
+
+Run the printed command on your workstation. No SSH key or inbound SSH rule is needed. Once connected, check that cloud-init finished and the containers are running:
+
+```bash
+sudo cloud-init status --long
+sudo tail -n 100 /var/log/aiops-bootstrap.log
+cd /opt/aiops-agent
+sudo docker compose ps
+sudo docker compose logs --tail=100
+```
+
+If the instance is not yet available in Systems Manager, wait briefly and check its bootstrap log again.
+
+### Step 3: Open Grafana privately
+
+In a second workstation terminal, print and run the port-forwarding command:
+
+```bash
+terraform output -raw grafana_tunnel_command
+```
+
+Leave that tunnel running, then visit `http://127.0.0.1:3000` in your browser. Sign in with username `admin`. Retrieve the generated password from the Systems Manager shell:
+
+```bash
+sudo sed -n 's/^GF_SECURITY_ADMIN_PASSWORD=//p' /opt/aiops-agent/.env
+```
+
+Keep this password private. It is generated on the instance and is not stored in Terraform state.
+
+To access Prometheus or Locust without making them public, open another SSM port-forwarding session from your workstation. Replace `<INSTANCE_ID>` with `terraform output -raw instance_id`:
+
+```bash
+aws ssm start-session --target <INSTANCE_ID> --document-name AWS-StartPortForwardingSession --parameters '{"portNumber":["9090"],"localPortNumber":["9090"]}' --region us-east-1
+```
+
+Open `http://127.0.0.1:9090` while the tunnel is active. For Locust, repeat with remote and local port `8089`, then visit `http://127.0.0.1:8089`. These loopback addresses are on your workstation; the SSH/SSM session securely forwards each port to the instance.
+
+### Step 4: Destroy the demo when finished
+
+From the Terraform directory, inspect and remove the infrastructure when you no longer need it:
+
+```bash
+terraform plan -destroy
+terraform destroy
+```
+
+Destroying the instance also deletes its root disk, including its local Prometheus/Grafana data, logs, and generated Grafana password. Back up anything you need before destroying it.
+
+For additional details on cost assumptions, troubleshooting, and the provisioned resources, see [`terraform/README.md`](terraform/README.md).
 
 ## 10. Future roadmap
 
